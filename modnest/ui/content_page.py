@@ -11,13 +11,14 @@ from PySide6.QtWidgets import (
 from ..categorize import guess_category
 from ..instances import FALLBACK_CATEGORY, KINDS, ContentSet, Instance
 from .mod_tree import CATEGORY, MOD, ModTree
+from ..i18n import tr
 
 HINTS = {
-    "mods": "Ziehe Mods per Drag & Drop in Kategorie und Reihenfolge. ⚙ = andere Version wählen.",
-    "resourcepacks": "Die Reihenfolge zählt: oben = höchste Priorität. Aktivierte Packs werden beim Start "
-                     "in dieser Reihenfolge im Spiel eingeschaltet. ⚙ = andere Version wählen.",
-    "shaderpacks": "Shader brauchen Iris (Fabric/Quilt/NeoForge) oder OptiFine. Den aktiven Shader wählst du "
-                   "im Spiel unter Optionen → Grafik → Shader. ⚙ = andere Version wählen.",
+    "mods": tr("Ziehe Mods per Drag & Drop in Kategorie und Reihenfolge. ⚙ = andere Version wählen."),
+    "resourcepacks": tr("Die Reihenfolge zählt: oben = höchste Priorität. Aktivierte Packs werden beim Start "
+                     "in dieser Reihenfolge im Spiel eingeschaltet. ⚙ = andere Version wählen."),
+    "shaderpacks": tr("Shader brauchen Iris (Fabric/Quilt/NeoForge) oder OptiFine. Den aktiven Shader wählst du "
+                   "im Spiel unter Optionen → Grafik → Shader. ⚙ = andere Version wählen."),
 }
 
 
@@ -39,16 +40,16 @@ class ContentPage(QWidget):
         bar = QHBoxLayout()
         bar.setSpacing(8)
         self.filter = QLineEdit()
-        self.filter.setPlaceholderText(f"🔍  {info['label']} filtern …")
+        self.filter.setPlaceholderText(tr("🔍  {what} filtern …").format(what=tr(info["label"])))
         self.filter.setClearButtonEnabled(True)
         self.filter.textChanged.connect(lambda t: self.tree.set_filter(t))
         bar.addWidget(self.filter, 1)
         for text, tip, slot in [
-            ("＋  Kategorie", "Neue Kategorie anlegen", self.add_category),
-            ("↑", "Auswahl nach oben", lambda: self.shift_selected(-1)),
-            ("↓", "Auswahl nach unten", lambda: self.shift_selected(1)),
-            ("⇕", "Alle Kategorien auf-/zuklappen", self.toggle_expand),
-            ("📁", "Ordner öffnen", self.open_folder),
+            (tr("＋  Kategorie"), tr("Neue Kategorie anlegen"), self.add_category),
+            ("↑", tr("Auswahl nach oben"), lambda: self.shift_selected(-1)),
+            ("↓", tr("Auswahl nach unten"), lambda: self.shift_selected(1)),
+            ("⇕", tr("Alle Kategorien auf-/zuklappen"), self.toggle_expand),
+            ("📁", tr("Ordner öffnen"), self.open_folder),
         ]:
             btn = QPushButton(text)
             btn.setToolTip(tip)
@@ -64,14 +65,14 @@ class ContentPage(QWidget):
         hint.setWordWrap(True)
         hint_row.addWidget(hint, 1)
         if kind == "shaderpacks":
-            self.iris_btn = QPushButton("✨ Iris installieren")
+            self.iris_btn = QPushButton(tr("✨ Iris installieren"))
             self.iris_btn.setObjectName("ghost")
             self.iris_btn.clicked.connect(self.irisRequested)
             hint_row.addWidget(self.iris_btn)
         layout.addLayout(hint_row)
 
         self.tree = ModTree(icon_loader)
-        self.tree.setHeaderLabels([info["singular"], "Version", "Quelle", ""])
+        self.tree.setHeaderLabels([tr(info["singular"]), tr("Version"), tr("Quelle"), ""])
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.context_menu)
         self.tree.layoutChanged.connect(self.save_layout)
@@ -80,7 +81,8 @@ class ContentPage(QWidget):
         self.tree.itemDoubleClicked.connect(self._double_clicked)
         layout.addWidget(self.tree, 1)
 
-        self.empty = QLabel(f"Noch keine {info['label']} installiert.\nWechsle zu „Entdecken“, um welche zu finden.")
+        self.empty = QLabel(tr("Noch keine {what} installiert.\nWechsle zu „Entdecken“, um welche zu finden.").format(
+            what=tr(info["label"])))
         self.empty.setObjectName("empty")
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.empty)
@@ -131,7 +133,7 @@ class ContentPage(QWidget):
         try:
             self.content.set_enabled(file, enabled)
         except OSError as exc:
-            QMessageBox.warning(self, "Fehler", f"Datei konnte nicht umbenannt werden:\n{exc}")
+            QMessageBox.warning(self, tr("Fehler"), tr("Datei konnte nicht umbenannt werden:\n{e}").format(e=exc))
         self.rebuild()
 
     def _gear(self, file: str) -> None:
@@ -143,35 +145,36 @@ class ContentPage(QWidget):
     def add_category(self) -> None:
         if not self.content:
             return
-        name, ok = QInputDialog.getText(self, "Neue Kategorie", "Name der Kategorie:")
+        name, ok = QInputDialog.getText(self, tr("Neue Kategorie"), tr("Name der Kategorie:"))
         if ok and name.strip():
             if name.strip() in self.content.category_names():
-                QMessageBox.information(self, "Kategorie", "Diese Kategorie gibt es schon.")
+                QMessageBox.information(self, tr("Kategorie"), tr("Diese Kategorie gibt es schon."))
                 return
-            color = QColorDialog.getColor(QColor("#22c55e"), self, "Farbe der Kategorie")
+            color = QColorDialog.getColor(QColor("#22c55e"), self, tr("Farbe der Kategorie"))
             self.content.add_category(name.strip(), color.name() if color.isValid() else "#64748b")
             self.rebuild()
 
     def rename_category(self, name: str) -> None:
         if name == FALLBACK_CATEGORY:
             return
-        new, ok = QInputDialog.getText(self, "Kategorie umbenennen", "Neuer Name:", text=name)
+        new, ok = QInputDialog.getText(self, tr("Kategorie umbenennen"), tr("Neuer Name:"), text=name)
         if ok and new.strip() and new.strip() != name:
             if new.strip() in self.content.category_names():
-                QMessageBox.information(self, "Kategorie", "Diese Kategorie gibt es schon.")
+                QMessageBox.information(self, tr("Kategorie"), tr("Diese Kategorie gibt es schon."))
                 return
             self.content.rename_category(name, new.strip())
             self.rebuild()
 
     def recolor_category(self, name: str) -> None:
-        color = QColorDialog.getColor(QColor(self.content.category_color(name)), self, "Farbe wählen")
+        color = QColorDialog.getColor(QColor(self.content.category_color(name)), self, tr("Farbe wählen"))
         if color.isValid():
             self.content.set_category_color(name, color.name())
             self.rebuild()
 
     def delete_category(self, name: str) -> None:
-        if QMessageBox.question(self, "Kategorie löschen",
-                                f"Kategorie „{name}“ löschen?\nDie Einträge darin landen in „{FALLBACK_CATEGORY}“.") \
+        if QMessageBox.question(self, tr("Kategorie löschen"),
+                                tr("Kategorie „{name}“ löschen?\nDie Einträge darin landen in „{fallback}“.").format(
+                                    name=name, fallback=tr(FALLBACK_CATEGORY))) \
                 == QMessageBox.StandardButton.Yes:
             self.content.delete_category(name)
             self.rebuild()
@@ -196,11 +199,11 @@ class ContentPage(QWidget):
                     m.category = guess
                     count += 1
         self.rebuild()
-        self.message.emit(f"{count} Eintrag/Einträge automatisch einsortiert.")
+        self.message.emit(tr("{n} Eintrag/Einträge automatisch einsortiert.").format(n=count))
 
     def remove_items(self, files: list[str]) -> None:
-        text = f"{len(files)} Eintrag/Einträge wirklich entfernen? Die Dateien werden gelöscht."
-        if QMessageBox.question(self, "Entfernen", text) == QMessageBox.StandardButton.Yes:
+        text = tr("{n} Eintrag/Einträge wirklich entfernen? Die Dateien werden gelöscht.").format(n=len(files))
+        if QMessageBox.question(self, tr("Entfernen"), text) == QMessageBox.StandardButton.Yes:
             for f in files:
                 self.content.remove(f)
             self.rebuild()
@@ -258,29 +261,29 @@ class ContentPage(QWidget):
         files = [self.tree.key(i) for i in self.tree.selected_of_kind(MOD)]
         if item is not None and self.tree.kind(item) == CATEGORY:
             name = self.tree.key(item)
-            menu.addAction("Umbenennen …", lambda: self.rename_category(name)).setEnabled(name != FALLBACK_CATEGORY)
-            menu.addAction("Farbe ändern …", lambda: self.recolor_category(name))
-            menu.addAction("Löschen", lambda: self.delete_category(name)).setEnabled(name != FALLBACK_CATEGORY)
+            menu.addAction(tr("Umbenennen …"), lambda: self.rename_category(name)).setEnabled(name != FALLBACK_CATEGORY)
+            menu.addAction(tr("Farbe ändern …"), lambda: self.recolor_category(name))
+            menu.addAction(tr("Löschen"), lambda: self.delete_category(name)).setEnabled(name != FALLBACK_CATEGORY)
             menu.addSeparator()
         elif files:
-            move = menu.addMenu(f"In Kategorie verschieben ({len(files)})")
+            move = menu.addMenu(tr("In Kategorie verschieben ({n})").format(n=len(files)))
             for cat in self.content.category_names():
-                move.addAction(cat, lambda c=cat: self.move_to_category(files, c))
-            move.addAction("＋ Neue Kategorie …", lambda: self._move_to_new_category(files))
-            menu.addAction("Aktivieren", lambda: self._set_enabled(files, True))
-            menu.addAction("Deaktivieren", lambda: self._set_enabled(files, False))
+                move.addAction(tr(cat), lambda c=cat: self.move_to_category(files, c))
+            move.addAction(tr("＋ Neue Kategorie …"), lambda: self._move_to_new_category(files))
+            menu.addAction(tr("Aktivieren"), lambda: self._set_enabled(files, True))
+            menu.addAction(tr("Deaktivieren"), lambda: self._set_enabled(files, False))
             if len(files) == 1:
                 entry = self.content.find_file(files[0])
                 if entry and entry.project_id and entry.source != "local":
-                    menu.addAction("⚙  Version ändern …", lambda: self.versionRequested.emit(self.kind, entry))
+                    menu.addAction(tr("⚙  Version ändern …"), lambda: self.versionRequested.emit(self.kind, entry))
                 if entry and entry.url:
-                    menu.addAction("Projektseite öffnen", lambda: QDesktopServices.openUrl(QUrl(entry.url)))
+                    menu.addAction(tr("Projektseite öffnen"), lambda: QDesktopServices.openUrl(QUrl(entry.url)))
             menu.addSeparator()
-            menu.addAction("Entfernen …", lambda: self.remove_items(files))
+            menu.addAction(tr("Entfernen …"), lambda: self.remove_items(files))
             menu.addSeparator()
-        menu.addAction("Neue Kategorie …", self.add_category)
-        menu.addAction("Unkategorisierte automatisch einsortieren", self.auto_sort)
-        menu.addAction("Neu laden", self.refresh)
+        menu.addAction(tr("Neue Kategorie …"), self.add_category)
+        menu.addAction(tr("Unkategorisierte automatisch einsortieren"), self.auto_sort)
+        menu.addAction(tr("Neu laden"), self.refresh)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _move_to_new_category(self, files: list[str]) -> None:

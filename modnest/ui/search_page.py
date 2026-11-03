@@ -9,21 +9,22 @@ from PySide6.QtWidgets import (
 from ..instances import KINDS, Instance
 from ..sources import SOURCES, get_source
 from .workers import run_task
+from ..i18n import tr
 
 AUTO = "__auto__"
 PAGE_SIZE = 30
 PLACEHOLDERS = {
-    "mods": "Mods suchen, z.B. Sodium, JEI, Create …",
-    "resourcepacks": "Texturepacks suchen, z.B. Faithful, Fresh Animations …",
-    "shaderpacks": "Shader suchen, z.B. Complementary, BSL, Bliss …",
+    "mods": tr("Mods suchen, z.B. Sodium, JEI, Create …"),
+    "resourcepacks": tr("Texturepacks suchen, z.B. Faithful, Fresh Animations …"),
+    "shaderpacks": tr("Shader suchen, z.B. Complementary, BSL, Bliss …"),
 }
 
 
 def _fmt_downloads(n: int) -> str:
     if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f} Mio."
+        return tr("{n} Mio.").format(n=f"{n / 1_000_000:.1f}")
     if n >= 1_000:
-        return f"{n / 1_000:.0f} Tsd."
+        return tr("{n} Tsd.").format(n=f"{n / 1_000:.0f}")
     return str(n)
 
 
@@ -51,7 +52,7 @@ class SearchPage(QWidget):
         pills.setSpacing(6)
         self.kind_group = QButtonGroup(self)
         for key, icon in (("mods", "🧩"), ("resourcepacks", "🎨"), ("shaderpacks", "✨")):
-            btn = QPushButton(f"{icon}  {KINDS[key]['label']}")
+            btn = QPushButton(f"{icon}  {tr(KINDS[key]['label'])}")
             btn.setObjectName("pill")
             btn.setCheckable(True)
             btn.setChecked(key == "mods")
@@ -72,7 +73,7 @@ class SearchPage(QWidget):
         self.query.setClearButtonEnabled(True)
         self.query.returnPressed.connect(self.search)
         bar.addWidget(self.query, 1)
-        go = QPushButton("Suchen")
+        go = QPushButton(tr("Suchen"))
         go.setObjectName("primary")
         go.clicked.connect(self.search)
         bar.addWidget(go)
@@ -83,7 +84,7 @@ class SearchPage(QWidget):
         layout.addWidget(self.info)
 
         self.results = QTreeWidget()
-        self.results.setHeaderLabels(["Name", "Autor", "Downloads"])
+        self.results.setHeaderLabels([tr("Name"), tr("Autor"), tr("Downloads")])
         self.results.setRootIsDecorated(False)
         self.results.setIconSize(QSize(44, 44))
         self.results.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -97,19 +98,19 @@ class SearchPage(QWidget):
         layout.addWidget(self.results, 1)
 
         bottom = QHBoxLayout()
-        bottom.addWidget(QLabel("Kategorie:"))
+        bottom.addWidget(QLabel(tr("Kategorie:")))
         self.category = QComboBox()
         self.category.setMinimumWidth(180)
         bottom.addWidget(self.category)
         bottom.addStretch(1)
-        page = QPushButton("Projektseite")
+        page = QPushButton(tr("Projektseite"))
         page.clicked.connect(self.open_page)
         bottom.addWidget(page)
-        self.version_btn = QPushButton("⚙  Version wählen …")
-        self.version_btn.setToolTip("Optional: eine bestimmte (z.B. ältere) Version installieren")
+        self.version_btn = QPushButton(tr("⚙  Version wählen …"))
+        self.version_btn.setToolTip(tr("Optional: eine bestimmte (z.B. ältere) Version installieren"))
         self.version_btn.clicked.connect(self.pick_version)
         bottom.addWidget(self.version_btn)
-        self.install_btn = QPushButton("⬇  Neueste installieren")
+        self.install_btn = QPushButton(tr("⬇  Neueste installieren"))
         self.install_btn.setObjectName("primary")
         self.install_btn.clicked.connect(self.install_selected)
         bottom.addWidget(self.install_btn)
@@ -132,7 +133,7 @@ class SearchPage(QWidget):
             return
         self.kind = kind
         for btn in self.kind_group.buttons():
-            btn.setChecked(KINDS[kind]["label"] in btn.text())
+            btn.setChecked(tr(KINDS[kind]["label"]) in btn.text())
         self.query.setPlaceholderText(PLACEHOLDERS[kind])
         self.refresh_categories()
         self.search()
@@ -140,10 +141,10 @@ class SearchPage(QWidget):
     def refresh_categories(self) -> None:
         current = self.category.currentData()
         self.category.clear()
-        self.category.addItem("Automatisch erkennen", AUTO)
+        self.category.addItem(tr("Automatisch erkennen"), AUTO)
         if self.instance:
             for name in self.instance.content[self.kind].category_names():
-                self.category.addItem(name, name)
+                self.category.addItem(tr(name), name)
         idx = self.category.findData(current)
         self.category.setCurrentIndex(max(idx, 0))
 
@@ -162,8 +163,8 @@ class SearchPage(QWidget):
             return
         if self.kind == "mods" and self.instance.loader == "vanilla":
             self.results.clear()
-            self.info.setText("Vanilla-Instanzen können keine Mods laden – Texturepacks gehen aber! "
-                              "Für Mods erstelle eine Instanz mit Fabric, Forge o.ä.")
+            self.info.setText(tr("Vanilla-Instanzen können keine Mods laden – Texturepacks gehen aber! "
+                              "Für Mods erstelle eine Instanz mit Fabric, Forge o.ä."))
             return
         if not more:
             self.offset = 0
@@ -176,7 +177,8 @@ class SearchPage(QWidget):
         query = self.query.text().strip()
         offset = self.offset
         kind = self.kind
-        self.info.setText(f"Suche {KINDS[kind]['label']} auf {SOURCES[src_key]} für Minecraft {inst.mc_version} …")
+        self.info.setText(tr("Suche {what} auf {source} für Minecraft {mc} …").format(
+            what=tr(KINDS[kind]["label"]), source=SOURCES[src_key], mc=inst.mc_version))
 
         def work():
             return get_source(src_key, self.settings).search(query, inst.mc_version, inst.loader, offset,
@@ -206,12 +208,13 @@ class SearchPage(QWidget):
                 self.icon_loader.load(proj.icon_url, lambda pix, it=item: it.setIcon(0, QIcon(pix)))
         mc = self.instance.mc_version
         loader = f" / {self.instance.loader}" if self.kind == "mods" else ""
-        self.info.setText(f"{len(self.projects)} Ergebnisse auf {self.source.currentText()} – passend zu Minecraft "
-                          f"{mc}{loader}. Doppelklick installiert die neueste Version.")
+        self.info.setText(tr("{n} Ergebnisse auf {source} – passend zu Minecraft {mc}{loader}. "
+                             "Doppelklick installiert die neueste Version.").format(
+            n=len(self.projects), source=self.source.currentText(), mc=mc, loader=loader))
 
     @staticmethod
     def _set_title(item, proj, installed) -> None:
-        mark = "   ✔ installiert" if (proj.source, proj.project_id) in installed else ""
+        mark = tr("   ✔ installiert") if (proj.source, proj.project_id) in installed else ""
         item.setText(0, f"{proj.title}{mark}\n{proj.description}")
 
     def _error(self, search_id: int, err: str) -> None:
@@ -226,7 +229,7 @@ class SearchPage(QWidget):
         count = len(self.results.selectedItems())
         self.install_btn.setEnabled(count > 0)
         self.version_btn.setEnabled(count == 1)
-        self.install_btn.setText("⬇  Neueste installieren" if count <= 1 else f"⬇  {count} installieren")
+        self.install_btn.setText(tr("⬇  Neueste installieren") if count <= 1 else tr("⬇  {n} installieren").format(n=count))
 
     def install_selected(self) -> None:
         for proj in self._selected_projects():

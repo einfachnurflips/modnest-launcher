@@ -3,6 +3,7 @@
 Benötigt einen eigenen API-Key von https://console.curseforge.com (kostenlos).
 """
 from .base import Project, Release, SourceError, pick_latest, session
+from ..i18n import tr
 
 API = "https://api.curseforge.com/v1"
 GAME_MINECRAFT = 432
@@ -17,17 +18,17 @@ class CurseForge:
     def __init__(self, api_key: str):
         if not api_key:
             raise SourceError(
-                "Für CurseForge wird ein API-Key benötigt.\n"
-                "Hol dir kostenlos einen auf console.curseforge.com und trag ihn in den Einstellungen ein."
+                tr("Für CurseForge wird ein API-Key benötigt.\n"
+                "Hol dir kostenlos einen auf console.curseforge.com und trag ihn in den Einstellungen ein.")
             )
         self.api_key = api_key
 
     def _get(self, path: str, **params):
         resp = session.get(API + path, params=params, headers={"x-api-key": self.api_key}, timeout=20)
         if resp.status_code == 403:
-            raise SourceError("CurseForge hat den API-Key abgelehnt (403). Bitte in den Einstellungen prüfen.")
+            raise SourceError(tr("CurseForge hat den API-Key abgelehnt (403). Bitte in den Einstellungen prüfen."))
         if resp.status_code == 404:
-            raise SourceError("Projekt auf CurseForge nicht gefunden.")
+            raise SourceError(tr("Projekt auf CurseForge nicht gefunden."))
         resp.raise_for_status()
         return resp.json()["data"]
 
@@ -96,6 +97,6 @@ class CurseForge:
     def resolve(self, project_id: str, mc_version: str, loader: str, kind: str = "mods") -> Release:
         versions = self.list_versions(project_id, mc_version, loader, kind)
         if not versions:
-            raise SourceError(f"Keine Datei für Minecraft {mc_version}"
-                              + (f" ({loader})" if kind == "mods" else "") + " verfügbar.")
+            raise SourceError(tr("Keine Datei für Minecraft {mc}{loader} verfügbar.").format(
+                mc=mc_version, loader=f" ({loader})" if kind == "mods" else ""))
         return pick_latest(versions)

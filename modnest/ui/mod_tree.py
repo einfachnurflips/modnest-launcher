@@ -4,13 +4,15 @@ from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTreeWidget, QTreeWidgetItem
 
 from ..instances import ContentSet
+from . import style
+from ..i18n import tr
 
 KIND_ROLE = Qt.ItemDataRole.UserRole
 KEY_ROLE = Qt.ItemDataRole.UserRole + 1
 CATEGORY, MOD = "category", "mod"
 DIP = QAbstractItemView.DropIndicatorPosition
 
-SOURCE_LABELS = {"modrinth": "Modrinth", "curseforge": "CurseForge", "local": "Lokal"}
+SOURCE_LABELS = {"modrinth": "Modrinth", "curseforge": "CurseForge", "local": tr("Lokal")}
 
 
 def color_dot(color: str, size: int = 14) -> QIcon:
@@ -35,7 +37,7 @@ class ModTree(QTreeWidget):
     def __init__(self, icon_loader, parent=None):
         super().__init__(parent)
         self.icon_loader = icon_loader
-        self.setHeaderLabels(["Name", "Version", "Quelle", ""])
+        self.setHeaderLabels([tr("Name"), tr("Version"), tr("Quelle"), ""])
         self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -74,7 +76,7 @@ class ModTree(QTreeWidget):
         self.update_counts()
 
     def _make_category(self, name: str, color: str) -> QTreeWidgetItem:
-        item = QTreeWidgetItem([name])
+        item = QTreeWidgetItem([tr(name)])
         item.setData(0, KIND_ROLE, CATEGORY)
         item.setData(0, KEY_ROLE, name)
         item.setIcon(0, color_dot(color))
@@ -82,7 +84,10 @@ class ModTree(QTreeWidget):
         font.setBold(True)
         font.setPointSize(font.pointSize() + 1)
         item.setFont(0, font)
-        item.setForeground(0, QBrush(QColor(color)))
+        text_color = QColor(color)
+        if style.current() == "light":
+            text_color = text_color.darker(150)
+        item.setForeground(0, QBrush(text_color))
         item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                       | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
         item.setSizeHint(0, QSize(0, 40))
@@ -93,14 +98,14 @@ class ModTree(QTreeWidget):
         item = QTreeWidgetItem([mod.name or mod.file, version, SOURCE_LABELS.get(mod.source, mod.source), ""])
         if mod.project_id and mod.source != "local":
             item.setText(self.GEAR_COLUMN, "⚙")
-            item.setToolTip(self.GEAR_COLUMN, "Version ändern")
+            item.setToolTip(self.GEAR_COLUMN, tr("Version ändern"))
             item.setTextAlignment(self.GEAR_COLUMN, Qt.AlignmentFlag.AlignCenter)
             gear_font = QFont()
             gear_font.setPointSize(gear_font.pointSize() + 3)
             item.setFont(self.GEAR_COLUMN, gear_font)
-            item.setForeground(self.GEAR_COLUMN, QBrush(QColor("#8b93a1")))
+            item.setForeground(self.GEAR_COLUMN, QBrush(QColor(style.color("muted"))))
         if mod.pinned:
-            item.setToolTip(1, "Bewusst gewählte Version")
+            item.setToolTip(1, tr("Bewusst gewählte Version"))
         item.setData(0, KIND_ROLE, MOD)
         item.setData(0, KEY_ROLE, mod.file)
         item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
@@ -110,7 +115,7 @@ class ModTree(QTreeWidget):
         item.setToolTip(0, tip)
         if not mod.enabled:
             for col in range(3):
-                item.setForeground(col, QBrush(QColor("#5b6270")))
+                item.setForeground(col, QBrush(QColor(style.color("disabled"))))
         if mod.icon_url:
             self.icon_loader.load(mod.icon_url, lambda pix, it=item: it.setIcon(0, QIcon(pix)))
         return item
@@ -119,7 +124,7 @@ class ModTree(QTreeWidget):
         self._filling = True
         for i in range(self.topLevelItemCount()):
             cat = self.topLevelItem(i)
-            cat.setText(0, f"{cat.data(0, KEY_ROLE)}   ({cat.childCount()})")
+            cat.setText(0, f"{tr(cat.data(0, KEY_ROLE))}   ({cat.childCount()})")
         self._filling = False
 
     # --- Abfragen ----------------------------------------------------------

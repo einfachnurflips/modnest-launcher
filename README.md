@@ -3,34 +3,53 @@
 Ein Minecraft-Launcher für Windows, mit dem du **Mods, Texturepacks und Shader** direkt von **Modrinth** und **CurseForge** installierst und so ordnest, wie du willst: per **Drag & Drop** und in **eigenen Kategorien** wie „Performance“, „Grafik & Optik“ oder „PvP“.
 
 <p align="center">
-  <img src="docs/mods.png" alt="Mods nach Kategorien geordnet" width="820">
+  <img src="docs/home.png" alt="Home mit Welten, Servern, Mod-Updates und News" width="820">
 </p>
 
 ## Features
 
+**Home**
+- **Weiterspielen** mit der zuletzt gespielten Instanz
+- **Zuletzt gespielte Welten und Server** mit **Beitreten**: Das Spiel springt direkt in die Welt bzw. auf den Server (ab Minecraft 1.20)
+- **Server-Status live**: online/offline, Spieler (z.B. 27.800/200.000) und Ping
+- **Mod-Updates** mit „Alle aktualisieren“
+- **Minecraft-News** und Patch-Notes von Mojang
+
 **Mods, Texturepacks & Shader verwalten**
-- Je ein eigener Tab für Mods, Texturepacks und Shader, alle mit denselben Funktionen
-- **Drag & Drop**: Einträge in jede Reihenfolge und jede Kategorie ziehen, auch ganze Kategorien verschieben
-- **Eigene Kategorien** anlegen, umbenennen, einfärben und löschen
-- Neue Inhalte werden anhand der Modrinth-/CurseForge-Kategorien **automatisch einsortiert**
-- Per Checkbox aktivieren oder deaktivieren, ohne etwas zu löschen
-- **⚙ Versionswahl**: per Klick auf das Zahnrad auf eine ältere oder neuere Version wechseln (optional, Standard ist immer die neueste)
-- **Texturepack-Reihenfolge** wird beim Start automatisch ins Spiel übernommen
-- Ein Klick installiert **Iris**, wenn Shader genutzt werden sollen
+- Je ein eigener Tab mit denselben Funktionen
+- **Drag & Drop** in jede Reihenfolge und Kategorie, auch ganze Kategorien
+- **Eigene Kategorien** anlegen, umbenennen, einfärben und löschen. Neue Inhalte werden **automatisch einsortiert**
+- Per Checkbox aktivieren oder deaktivieren
+- **⚙ Versionswahl**: optional eine ältere Version wählen (📌 markiert)
+- **Texturepack-Reihenfolge** wird ins Spiel übernommen, **Iris** lässt sich mit einem Klick installieren
+- Dateien einfach **ins Fenster ziehen**, sie landen automatisch im richtigen Tab
 
-**Entdecken & Installieren**
-- Suche auf **Modrinth** und **CurseForge** (für CurseForge wird ein eigener, kostenloser API-Key benötigt)
-- Ergebnisse werden automatisch nach Minecraft-Version und Mod-Loader der Instanz gefiltert
-- **Pflicht-Abhängigkeiten** wie die Fabric API werden mitinstalliert
+**Entdecken**
+- Suche auf **Modrinth** und **CurseForge**, gefiltert nach Version und Loader der Instanz
+- **Pflicht-Abhängigkeiten** werden mitinstalliert
 
-**Spielen**
-- Beliebig viele **Instanzen** mit eigener Minecraft-Version und eigenem Loader: Vanilla, Fabric, Quilt, Forge oder NeoForge
-- Minecraft, Mod-Loader und die passende **Java-Version** werden automatisch heruntergeladen
+**Instanzen & Modpacks teilen**
+- Vanilla, Fabric, Quilt, Forge, NeoForge
+- **Eigene Icons**, **Kopieren**, **Spielzeit**
+- **Export/Import** als **Modrinth-Pack (.mrpack)** oder **CurseForge-Pack (.zip)**: funktioniert in Modrinth App, CurseForge App, Prism, ATLauncher, MultiMC …
+
+**Screenshots, Backups & Cloud**
+- **Screenshot-Galerie** aller Instanzen mit Großansicht
+- **Automatische Backups** von Welten (nach dem Spielen) und Screenshots, mit Wiederherstellung
+- Der Backup-Ordner lässt sich per Klick in **OneDrive, Dropbox, iCloud Drive oder Google Drive** legen
+
+**Sonstiges**
+- **Absturz-Helfer**: zeigt die Ursache und verdächtige Mods an (mit „deaktivieren“-Button)
+- **Hell/Dunkel/„Wie Windows“**, **Deutsch/English**, **RAM-Schieberegler** mit Empfehlung
 - **Offline-Konten** und **Microsoft-Login** (Device-Code-Flow, Tokens mit Windows-DPAPI verschlüsselt)
-- Modernes dunkles Design und Startbildschirm mit Ladebalken, kein Konsolenfenster
+- Startbildschirm mit Ladebalken, kein Konsolenfenster, Hinweis bei neuen ModNest-Versionen
 
 <p align="center">
-  <img src="docs/entdecken.png" alt="Shader entdecken" width="410">
+  <img src="docs/instance-en.png" alt="Instanz (englisch)" width="410">
+  <img src="docs/home-light.png" alt="Heller Modus" width="410">
+</p>
+<p align="center">
+  <img src="docs/screenshots.png" alt="Screenshot-Galerie" width="410">
   <img src="docs/version.png" alt="Versionsauswahl" width="410">
 </p>
 

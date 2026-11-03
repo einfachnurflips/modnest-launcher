@@ -16,16 +16,17 @@ from dataclasses import asdict, dataclass, fields
 from .config import data_dir
 from .game import offline_uuid
 from .sources.base import SourceError, session
+from .i18n import tr
 
 MS_BASE = "https://login.microsoftonline.com/consumers/oauth2/v2.0"
 SCOPE = "XboxLive.signin offline_access"
 
 XSTS_ERRORS = {
-    2148916233: "Dieses Microsoft-Konto hat noch kein Xbox-Profil. Melde dich einmal auf xbox.com an und versuche es erneut.",
-    2148916235: "Xbox Live ist in deinem Land nicht verfügbar.",
-    2148916236: "Das Konto muss auf xbox.com noch als Erwachsenen-Konto verifiziert werden.",
-    2148916237: "Das Konto muss auf xbox.com noch als Erwachsenen-Konto verifiziert werden.",
-    2148916238: "Kinderkonto: Ein Erwachsener muss das Konto erst zu einer Microsoft-Familie hinzufügen.",
+    2148916233: tr("Dieses Microsoft-Konto hat noch kein Xbox-Profil. Melde dich einmal auf xbox.com an und versuche es erneut."),
+    2148916235: tr("Xbox Live ist in deinem Land nicht verfügbar."),
+    2148916236: tr("Das Konto muss auf xbox.com noch als Erwachsenen-Konto verifiziert werden."),
+    2148916237: tr("Das Konto muss auf xbox.com noch als Erwachsenen-Konto verifiziert werden."),
+    2148916238: tr("Kinderkonto: Ein Erwachsener muss das Konto erst zu einer Microsoft-Familie hinzufügen."),
 }
 
 
@@ -147,7 +148,7 @@ def offline_account(name: str) -> Account:
 def start_device_login(client_id: str) -> dict:
     """Fordert einen Gerätecode an. Antwort enthält user_code, verification_uri, device_code, interval."""
     if not client_id:
-        raise LoginError("Bitte zuerst in den Einstellungen eine Azure Client-ID eintragen (siehe README).")
+        raise LoginError(tr("Bitte zuerst in den Einstellungen eine Azure Client-ID eintragen (siehe README)."))
     resp = session.post(f"{MS_BASE}/devicecode", data={"client_id": client_id, "scope": SCOPE}, timeout=20)
     data = resp.json()
     if resp.status_code != 200:
@@ -161,7 +162,7 @@ def poll_device_login(client_id: str, device: dict, cancelled) -> Account:
     deadline = time.time() + int(device.get("expires_in", 900))
     while time.time() < deadline:
         if cancelled():
-            raise LoginError("Anmeldung abgebrochen.")
+            raise LoginError(tr("Anmeldung abgebrochen."))
         time.sleep(interval)
         resp = session.post(f"{MS_BASE}/token", data={
             "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
@@ -178,7 +179,7 @@ def poll_device_login(client_id: str, device: dict, cancelled) -> Account:
         if error:
             raise LoginError(_ms_error(data))
         return _minecraft_login(data["access_token"], data["refresh_token"])
-    raise LoginError("Der Code ist abgelaufen. Bitte erneut anmelden.")
+    raise LoginError(tr("Der Code ist abgelaufen. Bitte erneut anmelden."))
 
 
 def refresh(acc: Account, client_id: str) -> Account:
@@ -186,7 +187,7 @@ def refresh(acc: Account, client_id: str) -> Account:
     if acc.kind != "microsoft" or (acc.mc_token and acc.mc_token_expires - time.time() > 600):
         return acc
     if not acc.refresh_token:
-        raise LoginError(f"Die Anmeldung von {acc.name} ist abgelaufen. Bitte das Konto neu hinzufügen.")
+        raise LoginError(tr("Die Anmeldung von {name} ist abgelaufen. Bitte das Konto neu hinzufügen.").format(name=acc.name))
     resp = session.post(f"{MS_BASE}/token", data={
         "grant_type": "refresh_token",
         "client_id": client_id,
@@ -195,8 +196,8 @@ def refresh(acc: Account, client_id: str) -> Account:
     }, timeout=20)
     data = resp.json()
     if resp.status_code != 200:
-        raise LoginError(f"Die Anmeldung von {acc.name} ist abgelaufen – bitte das Konto neu hinzufügen.\n"
-                         f"({_ms_error(data)})")
+        raise LoginError(tr("Die Anmeldung von {name} ist abgelaufen. Bitte das Konto neu hinzufügen.").format(
+            name=acc.name) + f"\n({_ms_error(data)})")
     fresh = _minecraft_login(data["access_token"], data.get("refresh_token", acc.refresh_token))
     acc.name, acc.refresh_token = fresh.name, fresh.refresh_token
     acc.mc_token, acc.mc_token_expires = fresh.mc_token, fresh.mc_token_expires
@@ -212,7 +213,7 @@ def _minecraft_login(ms_token: str, refresh_token: str) -> Account:
         "TokenType": "JWT",
     }, headers=headers, timeout=20)
     if resp.status_code != 200:
-        raise LoginError(f"Xbox-Live-Anmeldung fehlgeschlagen (HTTP {resp.status_code}).")
+        raise LoginError(tr("Xbox-Live-Anmeldung fehlgeschlagen (HTTP {code}).").format(code=resp.status_code))
     xbl = resp.json()
     userhash = xbl["DisplayClaims"]["xui"][0]["uhs"]
     # XSTS
@@ -223,7 +224,7 @@ def _minecraft_login(ms_token: str, refresh_token: str) -> Account:
     }, headers=headers, timeout=20)
     if resp.status_code != 200:
         xerr = (resp.json() if resp.content else {}).get("XErr")
-        raise LoginError(XSTS_ERRORS.get(xerr, f"XSTS-Anmeldung fehlgeschlagen (HTTP {resp.status_code}, {xerr})."))
+        raise LoginError(XSTS_ERRORS.get(xerr, tr("XSTS-Anmeldung fehlgeschlagen (HTTP {code}, {xerr}).").format(code=resp.status_code, xerr=xerr)))
     xsts = resp.json()
     # Minecraft
     resp = session.post("https://api.minecraftservices.com/authentication/login_with_xbox", json={
@@ -231,20 +232,20 @@ def _minecraft_login(ms_token: str, refresh_token: str) -> Account:
     }, headers=headers, timeout=20)
     if resp.status_code == 403:
         raise LoginError(
-            "Minecraft hat die Anmeldung abgelehnt (403).\n\n"
+            tr("Minecraft hat die Anmeldung abgelehnt (403).\n\n"
             "Neue Azure-Apps müssen von Microsoft für die Minecraft-API freigeschaltet werden. "
-            "Beantrage das unter https://aka.ms/mce-reviewappid – die Prüfung kann einige Tage dauern."
+            "Beantrage das unter https://aka.ms/mce-reviewappid – die Prüfung kann einige Tage dauern.")
         )
     if resp.status_code != 200:
-        raise LoginError(f"Minecraft-Anmeldung fehlgeschlagen (HTTP {resp.status_code}).")
+        raise LoginError(tr("Minecraft-Anmeldung fehlgeschlagen (HTTP {code}).").format(code=resp.status_code))
     mc = resp.json()
     # Profil (schlägt fehl, wenn das Konto Minecraft nicht besitzt)
     resp = session.get("https://api.minecraftservices.com/minecraft/profile",
                        headers={"Authorization": f"Bearer {mc['access_token']}"}, timeout=20)
     if resp.status_code == 404:
-        raise LoginError("Dieses Microsoft-Konto besitzt Minecraft: Java Edition nicht.")
+        raise LoginError(tr("Dieses Microsoft-Konto besitzt Minecraft: Java Edition nicht."))
     if resp.status_code != 200:
-        raise LoginError(f"Minecraft-Profil konnte nicht geladen werden (HTTP {resp.status_code}).")
+        raise LoginError(tr("Minecraft-Profil konnte nicht geladen werden (HTTP {code}).").format(code=resp.status_code))
     profile = resp.json()
     return Account(
         kind="microsoft",
@@ -260,12 +261,12 @@ def _ms_error(data: dict) -> str:
     code = data.get("error", "")
     desc = (data.get("error_description") or "").split("\r\n")[0]
     if "AADSTS7000218" in desc or "AADSTS70002" in desc:
-        return ("Die Azure-App erlaubt keine Device-Code-Anmeldung. Aktiviere im Azure-Portal unter "
-                "Authentifizierung → „Öffentliche Clientflows zulassen“.")
+        return (tr("Die Azure-App erlaubt keine Device-Code-Anmeldung. Aktiviere im Azure-Portal unter "
+                "Authentifizierung → „Öffentliche Clientflows zulassen“."))
     if "AADSTS700016" in desc or "AADSTS700038" in desc:
-        return "Die Client-ID wurde nicht gefunden. Bitte in den Einstellungen prüfen."
+        return tr("Die Client-ID wurde nicht gefunden. Bitte in den Einstellungen prüfen.")
     if code == "expired_token":
-        return "Der Code ist abgelaufen. Bitte erneut anmelden."
+        return tr("Der Code ist abgelaufen. Bitte erneut anmelden.")
     if code in ("access_denied", "authorization_declined"):
-        return "Anmeldung wurde im Browser abgelehnt."
-    return f"{code}: {desc}" if desc else (code or "Unbekannter Fehler")
+        return tr("Anmeldung wurde im Browser abgelehnt.")
+    return f"{code}: {desc}" if desc else (code or tr("Unbekannter Fehler"))

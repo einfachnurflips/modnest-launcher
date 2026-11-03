@@ -2,6 +2,7 @@
 import json
 
 from .base import Project, Release, SourceError, pick_latest, session
+from ..i18n import tr
 
 API = "https://api.modrinth.com/v2"
 PROJECT_TYPES = {"mods": "mod", "resourcepacks": "resourcepack", "shaderpacks": "shader"}
@@ -10,7 +11,7 @@ PROJECT_TYPES = {"mods": "mod", "resourcepacks": "resourcepack", "shaderpacks": 
 def _get(path: str, **params):
     resp = session.get(API + path, params=params, timeout=20)
     if resp.status_code == 404:
-        raise SourceError("Projekt auf Modrinth nicht gefunden.")
+        raise SourceError(tr("Projekt auf Modrinth nicht gefunden."))
     resp.raise_for_status()
     return resp.json()
 
@@ -59,7 +60,7 @@ def get_project(project_id: str, kind: str = "mods") -> Project:
 def _release_from_version(v: dict) -> Release:
     files = v.get("files", [])
     if not files:
-        raise SourceError("Diese Version hat keine Datei.")
+        raise SourceError(tr("Diese Version hat keine Datei."))
     primary = next((f for f in files if f.get("primary")), files[0])
     deps = [
         d["project_id"]
@@ -99,6 +100,6 @@ def list_versions(project_id: str, mc_version: str, loader: str, kind: str = "mo
 def resolve(project_id: str, mc_version: str, loader: str, kind: str = "mods") -> Release:
     versions = list_versions(project_id, mc_version, loader, kind)
     if not versions:
-        raise SourceError(f"Keine Version für Minecraft {mc_version}"
-                          + (f" ({loader})" if kind == "mods" else "") + " verfügbar.")
+        raise SourceError(tr("Keine Version für Minecraft {mc}{loader} verfügbar.").format(
+            mc=mc_version, loader=f" ({loader})" if kind == "mods" else ""))
     return pick_latest(versions)

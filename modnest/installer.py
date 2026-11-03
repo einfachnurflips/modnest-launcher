@@ -2,6 +2,7 @@
 import re
 
 from .categorize import guess_category
+from .i18n import tr
 from .instances import Instance, Mod
 from .sources import Project, Release, SourceError, get_source
 from .sources.base import download
@@ -12,16 +13,17 @@ def _safe_filename(name: str) -> str:
 
 
 def install_project(instance: Instance, project: Project, settings, category: str | None, progress,
-                    release: Release | None = None) -> list[str]:
+                    release: Release | None = None, pin: bool | None = None) -> list[str]:
     """Lädt das Projekt (und bei Mods die Abhängigkeiten) herunter. Gibt die installierten Namen zurück.
 
     category=None bedeutet: automatisch anhand der Quell-Kategorien einordnen.
     release=None bedeutet: neueste passende Version; sonst genau diese Version.
+    pin: Version als „bewusst gewählt“ (📌) markieren – Standard: nur wenn release angegeben ist.
     progress(text, value, maximum) wird aus dem Worker-Thread aufgerufen.
     """
     kind = project.kind
     if kind == "mods" and instance.loader == "vanilla":
-        raise SourceError("Vanilla-Instanzen unterstützen keine Mods. Erstelle eine Instanz mit Fabric, Forge o.ä.")
+        raise SourceError(tr("Vanilla-Instanzen unterstützen keine Mods. Erstelle eine Instanz mit Fabric, Forge o.ä."))
     content = instance.content[kind]
     source = get_source(project.source, settings)
     installed: list[str] = []
@@ -35,17 +37,18 @@ def install_project(instance: Instance, project: Project, settings, category: st
             return  # Abhängigkeit schon vorhanden
         rel = chosen
         if rel is None:
-            progress(f"Suche passende Version von {proj.title} …", 0, 0)
+            progress(tr("Suche passende Version von {title} …").format(title=proj.title), 0, 0)
             rel = source.resolve(proj.project_id, instance.mc_version, instance.loader, kind)
         if not rel.download_url:
             raise SourceError(
-                f"Der Autor von {proj.title} erlaubt keine Downloads über Drittanbieter-Launcher.\n"
-                "Bitte lade die Datei manuell von der Webseite herunter und lege sie in den passenden Ordner."
+                tr("Der Autor von {title} erlaubt keine Downloads über Drittanbieter-Launcher.\n"
+                   "Bitte lade die Datei manuell von der Webseite herunter und lege sie in den passenden Ordner."
+                   ).format(title=proj.title)
             )
         filename = _safe_filename(rel.filename)
-        progress(f"Lade {filename} …", 0, 100)
+        progress(tr("Lade {file} …").format(file=filename), 0, 100)
         download(rel.download_url, content.folder / filename,
-                 lambda done, total: progress(f"Lade {filename} …", done * 100 // total, 100))
+                 lambda done, total: progress(tr("Lade {file} …").format(file=filename), done * 100 // total, 100))
         item = Mod(
             file=filename,
             name=proj.title,
@@ -57,7 +60,7 @@ def install_project(instance: Instance, project: Project, settings, category: st
             icon_url=proj.icon_url,
             url=proj.url,
             description=proj.description,
-            pinned=chosen is not None,
+            pinned=(chosen is not None) if pin is None or is_dependency else pin,
         )
         content.add(item)
         installed.append(proj.title)
@@ -69,7 +72,7 @@ def install_project(instance: Instance, project: Project, settings, category: st
             try:
                 install(source.get_project(dep_id, kind), None, True, None)
             except SourceError as exc:
-                raise SourceError(f"Abhängigkeit von {proj.title} konnte nicht installiert werden:\n{exc}") from exc
+                raise SourceError(tr("Abhängigkeit von {title} konnte nicht installiert werden:\n{e}").format(title=proj.title, e=exc)) from exc
 
     try:
         install(project, category, False, release)

@@ -252,6 +252,9 @@ class Instance:
         self.loader = "fabric"
         self.loader_version = ""
         self.version_id = ""       # installierte Versions-ID (z.B. fabric-loader-0.16-1.21.1)
+        self.icon = ""             # Dateiname eines eigenen Icons im Instanz-Ordner
+        self.playtime = 0          # gespielte Sekunden
+        self.last_played = 0.0     # Unix-Zeit des letzten Starts
         self.content = {kind: ContentSet(kind, path) for kind in KINDS}
 
     # Kurzformen für die Mods (häufigster Fall)
@@ -263,6 +266,12 @@ class Instance:
     def json_path(self) -> Path:
         return self.path / "instance.json"
 
+    @property
+    def icon_path(self) -> Path | None:
+        if self.icon and (self.path / self.icon).exists():
+            return self.path / self.icon
+        return None
+
     @classmethod
     def load(cls, path: Path) -> "Instance":
         inst = cls(path)
@@ -272,6 +281,9 @@ class Instance:
         inst.loader = raw.get("loader", "fabric")
         inst.loader_version = raw.get("loader_version", "")
         inst.version_id = raw.get("version_id", "")
+        inst.icon = raw.get("icon", "")
+        inst.playtime = int(raw.get("playtime", 0))
+        inst.last_played = float(raw.get("last_played", 0))
         # Mods stehen aus Kompatibilitätsgründen direkt auf oberster Ebene
         inst.content["mods"].load_raw(raw.get("categories"), raw.get("mods"))
         for kind in ("resourcepacks", "shaderpacks"):
@@ -292,6 +304,9 @@ class Instance:
             "loader": self.loader,
             "loader_version": self.loader_version,
             "version_id": self.version_id,
+            "icon": self.icon,
+            "playtime": self.playtime,
+            "last_played": self.last_played,
             "categories": mods["categories"],
             "mods": mods["items"],
             "resourcepacks": self.content["resourcepacks"].to_raw(),
@@ -343,13 +358,18 @@ def list_instances() -> list[Instance]:
     return result
 
 
-def create_instance(name: str, mc_version: str, loader: str) -> Instance:
+def _free_path(name: str) -> Path:
     base = _slug(name)
     path = instances_dir() / base
     n = 2
     while path.exists():
         path = instances_dir() / f"{base} ({n})"
         n += 1
+    return path
+
+
+def create_instance(name: str, mc_version: str, loader: str) -> Instance:
+    path = _free_path(name)
     path.mkdir(parents=True)
     inst = Instance(path)
     inst.name = name
@@ -363,3 +383,24 @@ def create_instance(name: str, mc_version: str, loader: str) -> Instance:
 
 def delete_instance(inst: Instance) -> None:
     shutil.rmtree(inst.path, ignore_errors=True)
+
+
+# Ordner, die beim Kopieren nie mitgenommen werden (Laufzeitdaten)
+_SKIP_ON_COPY = {"logs", "crash-reports", ".fabric", "launcher-log.txt", "debug"}
+
+
+def duplicate_instance(inst: Instance, new_name: str, include_worlds: bool, include_screenshots: bool = False) -> Instance:
+    """Kopiert eine Instanz inklusive Mods, Packs, Kategorien und Configs."""
+    skip = set(_SKIP_ON_COPY)
+    if not include_worlds:
+        skip.add("saves")
+    if not include_screenshots:
+        skip.add("screenshots")
+    path = _free_path(new_name)
+    shutil.copytree(inst.path, path, ignore=lambda d, names: [n for n in names if Path(d) == inst.path and n in skip])
+    copy = Instance.load(path)
+    copy.name = new_name
+    copy.playtime = 0
+    copy.last_played = 0
+    copy.save()
+    return copy

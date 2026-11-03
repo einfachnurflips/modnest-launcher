@@ -66,8 +66,22 @@ def install(instance: Instance, progress) -> str:
     return version_id
 
 
-def launch(instance: Instance, settings, account, progress) -> subprocess.Popen:
-    """account: ein angemeldetes accounts.Account (Microsoft-Token muss bereits erneuert sein)."""
+def supports_quick_play(mc_version: str) -> bool:
+    """Quick Play (direkt in Welt/Server) gibt es ab Minecraft 1.20 bzw. den neuen Jahresversionen."""
+    parts = mc_version.split(".")
+    try:
+        if parts[0] == "1":
+            return int(parts[1]) >= 20
+        return int(parts[0]) >= 24
+    except (IndexError, ValueError):
+        return False
+
+
+def launch(instance: Instance, settings, account, progress, quick_play: tuple[str, str] | None = None) -> subprocess.Popen:
+    """account: ein angemeldetes accounts.Account (Microsoft-Token muss bereits erneuert sein).
+
+    quick_play: ("world", Ordnername) oder ("server", "host:port") – startet direkt dort.
+    """
     version_id = install(instance, progress)
     progress("Starte Minecraft …", 0, 0)
     options = {
@@ -81,6 +95,14 @@ def launch(instance: Instance, settings, account, progress) -> subprocess.Popen:
     }
     if settings.java_path.strip():
         options["executablePath"] = settings.java_path.strip()
+    if quick_play:
+        target_kind, target = quick_play
+        if supports_quick_play(instance.mc_version):
+            options["quickPlayPath"] = "quickPlay/log.json"
+            options["quickPlaySingleplayer" if target_kind == "world" else "quickPlayMultiplayer"] = target
+        elif target_kind == "server":
+            host, _, port = target.rpartition(":")
+            options["server"], options["port"] = (host, port) if port.isdigit() else (target, "25565")
     command = mll.command.get_minecraft_command(version_id, str(minecraft_dir()), options)
 
     log_path = Path(instance.path) / "launcher-log.txt"

@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 APP_NAME = "ModNest"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 USER_AGENT = f"ModNest-Launcher/{APP_VERSION}"
 
 
@@ -37,6 +37,12 @@ class Settings:
     curseforge_api_key: str = ""
     ms_client_id: str = ""          # Azure-App für den Microsoft-Login
     last_instance: str = ""
+    theme: str = "dark"             # dark | light | system
+    language: str = "de"            # de | en
+    backup_dir: str = ""            # leer = %APPDATA%\ModNest\backups
+    backup_worlds: bool = True      # Welten beim Beenden des Spiels sichern
+    backup_screenshots: bool = True # Screenshots automatisch sichern
+    backup_keep: int = 5            # Anzahl Welt-Backups pro Welt
     extra: dict = field(default_factory=dict)
 
     @classmethod

@@ -22,19 +22,25 @@ class _Task(QRunnable):
         self.signals = signals
         self.with_progress = with_progress
 
+    def _emit(self, signal, *args):
+        try:
+            signal.emit(*args)
+        except RuntimeError:
+            pass  # Launcher wurde geschlossen, während die Aufgabe noch lief
+
     def run(self):
         try:
             if self.with_progress:
-                result = self.fn(lambda text, value, maximum: self.signals.progress.emit(text, value, maximum))
+                result = self.fn(lambda text, value, maximum: self._emit(self.signals.progress, text, value, maximum))
             else:
                 result = self.fn()
         except SourceError as exc:
-            self.signals.error.emit(str(exc))
+            self._emit(self.signals.error, str(exc))
         except Exception as exc:  # noqa: BLE001 – alles an die Oberfläche melden
             traceback.print_exc()
-            self.signals.error.emit(f"{type(exc).__name__}: {exc}")
+            self._emit(self.signals.error, f"{type(exc).__name__}: {exc}")
         else:
-            self.signals.done.emit(result)
+            self._emit(self.signals.done, result)
 
 
 _alive: set[_Signals] = set()

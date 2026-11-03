@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 
 from ..config import APP_NAME, APP_VERSION
 from .icons import logo_pixmap
+from ..i18n import tr
 
 SPLASH_STYLE = """
 #card { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #151a22, stop:1 #0d1117);
@@ -52,7 +53,7 @@ class Splash(QWidget):
         name.setObjectName("name")
         name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(name)
-        tag = QLabel("Minecraft-Launcher für Mods, Texturepacks & Shader")
+        tag = QLabel(tr("Minecraft-Launcher für Mods, Texturepacks & Shader"))
         tag.setObjectName("tag")
         tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(tag)
@@ -61,7 +62,7 @@ class Splash(QWidget):
         self.bar.setRange(0, 1000)
         self.bar.setTextVisible(False)
         lay.addWidget(self.bar)
-        self.status = QLabel("Starte …")
+        self.status = QLabel(tr("Starte …"))
         self.status.setObjectName("status")
         lay.addWidget(self.status)
         ver = QLabel(f"v{APP_VERSION}")

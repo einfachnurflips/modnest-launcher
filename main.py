@@ -40,10 +40,19 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     from modnest.config import APP_NAME, Settings, data_dir
+    from modnest.i18n import set_language, tr
     from modnest.ui.icons import app_icon
     from modnest.ui.splash import Splash
     from modnest.ui.style import build_style
 
+    settings = Settings.load()
+    set_language(settings.language)
+    # Qt-Standardtexte (z.B. „Speichern“/„Abbrechen“) in der gewählten Sprache
+    from PySide6.QtCore import QLibraryInfo, QTranslator
+    qt_translator = QTranslator(app)
+    if qt_translator.load(f"qtbase_{settings.language}",
+                          QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+        app.installTranslator(qt_translator)
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(app_icon())
     app.setStyle("Fusion")
@@ -51,17 +60,16 @@ def main() -> int:
     splash.show()
     app.processEvents()
 
-    splash.step("Lade Einstellungen …", 15, 250)
-    settings = Settings.load()
-    app.setStyleSheet(build_style(data_dir()))
+    splash.step(tr("Lade Einstellungen …"), 15, 250)
+    app.setStyleSheet(build_style(data_dir(), settings.theme))
 
-    splash.step("Lade Module …", 40, 250)
+    splash.step(tr("Lade Module …"), 40, 250)
     from modnest.ui.main_window import MainWindow  # noqa: E402 – schwerer Import, erst nach dem Splash
 
-    splash.step("Lade Instanzen, Mods & Packs …", 75, 300)
+    splash.step(tr("Lade Instanzen, Mods & Packs …"), 75, 300)
     window = MainWindow(settings)
 
-    splash.step("Fertig!", 100, 300)
+    splash.step(tr("Fertig!"), 100, 300)
     splash.finish(window)
     return app.exec()
 

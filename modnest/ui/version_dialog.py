@@ -9,8 +9,9 @@ from PySide6.QtWidgets import (
 from ..instances import Instance
 from ..sources import Project, get_source
 from .workers import run_task
+from ..i18n import tr
 
-TYPE_LABELS = {"release": ("Release", "#22c55e"), "beta": ("Beta", "#f59e0b"), "alpha": ("Alpha", "#ef4444")}
+TYPE_LABELS = {"release": (tr("Release"), "#22c55e"), "beta": (tr("Beta"), "#f59e0b"), "alpha": (tr("Alpha"), "#ef4444")}
 
 
 class VersionDialog(QDialog):
@@ -24,7 +25,7 @@ class VersionDialog(QDialog):
         self.releases = []
         self.selected = None
         self._request = 0
-        self.setWindowTitle(f"Version wählen – {project.title}")
+        self.setWindowTitle(tr("Version wählen – {title}").format(title=project.title))
         self.resize(760, 520)
 
         layout = QVBoxLayout(self)
@@ -40,8 +41,8 @@ class VersionDialog(QDialog):
         title.setObjectName("dialogtitle")
         titles.addWidget(title)
         loader = f" · {instance.loader}" if project.kind == "mods" else ""
-        sub = QLabel(f"Passend zu Minecraft {instance.mc_version}{loader}. Standard ist immer die neueste Version – "
-                     "hier kannst du bei Bedarf eine ältere wählen.")
+        sub = QLabel(tr("Passend zu Minecraft {mc}{loader}. Standard ist immer die neueste Version – "
+                        "hier kannst du bei Bedarf eine ältere wählen.").format(mc=instance.mc_version, loader=loader))
         sub.setObjectName("hint")
         sub.setWordWrap(True)
         titles.addWidget(sub)
@@ -52,18 +53,18 @@ class VersionDialog(QDialog):
                 pix.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)))
 
         filters = QHBoxLayout()
-        self.all_versions = QCheckBox("Auch Versionen für andere Minecraft-Versionen zeigen (kann inkompatibel sein)")
+        self.all_versions = QCheckBox(tr("Auch Versionen für andere Minecraft-Versionen zeigen (kann inkompatibel sein)"))
         self.all_versions.toggled.connect(self.load)
         filters.addWidget(self.all_versions)
         filters.addStretch(1)
-        self.betas = QCheckBox("Beta/Alpha zeigen")
+        self.betas = QCheckBox(tr("Beta/Alpha zeigen"))
         self.betas.setChecked(True)
         self.betas.toggled.connect(self._fill)
         filters.addWidget(self.betas)
         layout.addLayout(filters)
 
         self.list = QTreeWidget()
-        self.list.setHeaderLabels(["Version", "Typ", "Minecraft", "Datum"])
+        self.list.setHeaderLabels([tr("Version"), tr("Typ"), "Minecraft", tr("Datum")])
         self.list.setRootIsDecorated(False)
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.list.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -73,16 +74,16 @@ class VersionDialog(QDialog):
         self.list.itemSelectionChanged.connect(self._selection_changed)
         layout.addWidget(self.list, 1)
 
-        self.status = QLabel("Lade Versionen …")
+        self.status = QLabel(tr("Lade Versionen …"))
         self.status.setObjectName("hint")
         layout.addWidget(self.status)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        cancel = QPushButton("Abbrechen")
+        cancel = QPushButton(tr("Abbrechen"))
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)
-        self.ok = QPushButton("Diese Version installieren")
+        self.ok = QPushButton(tr("Diese Version installieren"))
         self.ok.setObjectName("primary")
         self.ok.setEnabled(False)
         self.ok.clicked.connect(self._accept)
@@ -94,7 +95,7 @@ class VersionDialog(QDialog):
         self._request += 1
         req = self._request
         self.list.clear()
-        self.status.setText("Lade Versionen …")
+        self.status.setText(tr("Lade Versionen …"))
         proj, inst = self.project, self.instance
         mc = "" if self.all_versions.isChecked() else inst.mc_version
 
@@ -145,7 +146,7 @@ class VersionDialog(QDialog):
             item.setToolTip(0, rel.filename)
             self.list.addTopLevelItem(item)
             shown += 1
-        self.status.setText(f"{shown} Version(en)." if shown else "Keine passenden Versionen gefunden.")
+        self.status.setText(tr("{n} Version(en).").format(n=shown) if shown else tr("Keine passenden Versionen gefunden."))
 
     def _selection_changed(self) -> None:
         items = self.list.selectedItems()
@@ -153,7 +154,7 @@ class VersionDialog(QDialog):
         self.ok.setEnabled(rel is not None and rel.version_id != self.current)
         if rel is not None and not rel.download_url:
             self.ok.setEnabled(False)
-            self.status.setText("Diese Datei darf nur über die Webseite heruntergeladen werden.")
+            self.status.setText(tr("Diese Datei darf nur über die Webseite heruntergeladen werden."))
 
     def _accept(self) -> None:
         items = self.list.selectedItems()

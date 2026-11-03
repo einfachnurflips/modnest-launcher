@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLa
 
 from .. import accounts
 from .workers import run_task
+from ..i18n import tr
 
 
 class MicrosoftLoginDialog(QDialog):
@@ -14,11 +15,11 @@ class MicrosoftLoginDialog(QDialog):
         self.account = None
         self.device = None
         self._cancelled = False
-        self.setWindowTitle("Mit Microsoft anmelden")
+        self.setWindowTitle(tr("Mit Microsoft anmelden"))
         self.setMinimumWidth(460)
 
         layout = QVBoxLayout(self)
-        self.info = QLabel("Fordere Anmeldecode an …")
+        self.info = QLabel(tr("Fordere Anmeldecode an …"))
         self.info.setWordWrap(True)
         layout.addWidget(self.info)
 
@@ -37,12 +38,12 @@ class MicrosoftLoginDialog(QDialog):
 
         row = QHBoxLayout()
         row.addStretch(1)
-        self.open_btn = QPushButton("Code kopieren && Browser öffnen")
+        self.open_btn = QPushButton(tr("Code kopieren && Browser öffnen"))
         self.open_btn.setObjectName("primary")
         self.open_btn.setEnabled(False)
         self.open_btn.clicked.connect(self.open_browser)
         row.addWidget(self.open_btn)
-        cancel = QPushButton("Abbrechen")
+        cancel = QPushButton(tr("Abbrechen"))
         cancel.clicked.connect(self.reject)
         row.addWidget(cancel)
         layout.addLayout(row)
@@ -55,10 +56,10 @@ class MicrosoftLoginDialog(QDialog):
             return
         self.device = device
         uri = device.get("verification_uri", "https://www.microsoft.com/link")
-        self.info.setText(f"1. Öffne <b>{uri}</b><br>2. Gib diesen Code ein und melde dich mit dem "
-                          "Microsoft-Konto an, mit dem du Minecraft gekauft hast:")
+        self.info.setText(tr("1. Öffne <b>{uri}</b><br>2. Gib diesen Code ein und melde dich mit dem "
+                             "Microsoft-Konto an, mit dem du Minecraft gekauft hast:").format(uri=uri))
         self.code.setText(device["user_code"])
-        self.status.setText("Warte auf Bestätigung im Browser …")
+        self.status.setText(tr("Warte auf Bestätigung im Browser …"))
         self.open_btn.setEnabled(True)
         client_id = self.settings.ms_client_id.strip()
         run_task(lambda: accounts.poll_device_login(client_id, device, lambda: self._cancelled),
@@ -68,7 +69,7 @@ class MicrosoftLoginDialog(QDialog):
         if self.device:
             QGuiApplication.clipboard().setText(self.device["user_code"])
             QDesktopServices.openUrl(QUrl(self.device.get("verification_uri", "https://www.microsoft.com/link")))
-            self.status.setText("Code kopiert – im Browser einfügen. Warte auf Bestätigung …")
+            self.status.setText(tr("Code kopiert – im Browser einfügen. Warte auf Bestätigung …"))
 
     def _logged_in(self, account) -> None:
         if self._cancelled:
@@ -81,7 +82,7 @@ class MicrosoftLoginDialog(QDialog):
             return
         self.code.setText("")
         self.open_btn.setEnabled(False)
-        self.info.setText("<b>Anmeldung fehlgeschlagen</b>")
+        self.info.setText(tr("<b>Anmeldung fehlgeschlagen</b>"))
         self.status.setText(err.replace("\n", "<br>"))
 
     def done(self, result: int) -> None:
