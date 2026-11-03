@@ -9,10 +9,9 @@ from PySide6.QtWidgets import (
 
 from .. import backup, game
 from ..i18n import LANGUAGES, tr
-from ..instances import KINDS, LOADERS
+from ..instances import KINDS, LOADERS, clear_defaults, has_defaults
 from ..system import ram_rating, total_ram_mb
 from .workers import run_task
-from ..i18n import tr
 
 
 class NewInstanceDialog(QDialog):
@@ -213,6 +212,26 @@ class SettingsDialog(QDialog):
         lang_hint = QLabel(tr("Die Sprache wird nach einem Neustart des Launchers übernommen."))
         lang_hint.setObjectName("hint")
         form.addRow(lang_hint)
+        self.minimize = QCheckBox(tr("Launcher beim Spielen minimieren (kommt nach dem Spiel zurück)"))
+        self.minimize.setChecked(settings.minimize_on_launch)
+        form.addRow(self.minimize)
+        self.discord = QCheckBox(tr("In Discord anzeigen, was ich spiele"))
+        self.discord.setChecked(settings.discord_rpc)
+        form.addRow(self.discord)
+        tools = QHBoxLayout()
+        tools.setContentsMargins(0, 0, 0, 0)
+        storage_btn = QPushButton(tr("💽  Speicherplatz & Aufräumen …").replace("&", "&&"))
+        storage_btn.clicked.connect(self._storage)
+        tools.addWidget(storage_btn)
+        self.defaults_btn = QPushButton(tr("Standard-Optionen zurücksetzen"))
+        self.defaults_btn.setToolTip(tr("Neue Instanzen starten dann wieder mit den Minecraft-Standardeinstellungen."))
+        self.defaults_btn.setVisible(has_defaults())
+        self.defaults_btn.clicked.connect(self._clear_defaults)
+        tools.addWidget(self.defaults_btn)
+        tools.addStretch(1)
+        tools_w = QWidget()
+        tools_w.setLayout(tools)
+        form.addRow(tools_w)
         self.tabs.addTab(gen_tab, tr("🎨  Allgemein"))
 
         # --- Spiel ---------------------------------------------------------
@@ -237,23 +256,30 @@ class SettingsDialog(QDialog):
         # --- Konten & Dienste ----------------------------------------------
         acc_tab = QWidget()
         form = QFormLayout(acc_tab)
-        self.cf_key = QLineEdit(settings.curseforge_api_key)
+        self.cf_key = QLineEdit("" if settings.is_builtin("curseforge_api_key") else settings.curseforge_api_key)
         self.cf_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.cf_key.setPlaceholderText(tr("von console.curseforge.com"))
+        if settings.builtin("curseforge_api_key"):
+            self.cf_key.setPlaceholderText(tr("✔ eingebaut – nur ausfüllen, wenn du einen eigenen nutzen willst"))
         form.addRow(tr("CurseForge API-Key"), self.cf_key)
         hint = QLabel(tr('Den kostenlosen Key bekommst du auf <a href="https://console.curseforge.com">'
                       "console.curseforge.com</a> → API Keys."))
         hint.setOpenExternalLinks(True)
         hint.setObjectName("hint")
         form.addRow(hint)
-        self.ms_client = QLineEdit(settings.ms_client_id)
+        self.ms_client = QLineEdit("" if settings.is_builtin("ms_client_id") else settings.ms_client_id)
         self.ms_client.setPlaceholderText(tr("Anwendungs-ID (Client-ID) deiner Azure-App"))
+        if settings.builtin("ms_client_id"):
+            self.ms_client.setPlaceholderText(tr("✔ eingebaut – nur ausfüllen, wenn du eine eigene nutzen willst"))
         form.addRow(tr("Microsoft Client-ID"), self.ms_client)
         ms_hint = QLabel(tr("Für den Microsoft-Login brauchst du eine eigene, von Microsoft freigeschaltete "
                          "Azure-App – Anleitung in der README."))
         ms_hint.setWordWrap(True)
         ms_hint.setObjectName("hint")
         form.addRow(ms_hint)
+        self.discord_id = QLineEdit("" if settings.is_builtin("discord_client_id") else settings.discord_client_id)
+        self.discord_id.setPlaceholderText(tr("optional – Anwendungs-ID von discord.com/developers"))
+        form.addRow(tr("Discord-ID"), self.discord_id)
         self.tabs.addTab(acc_tab, tr("🔑  Konten && Dienste"))
 
         # --- Backups -------------------------------------------------------
@@ -318,6 +344,15 @@ class SettingsDialog(QDialog):
         if path:
             self.java.setText(path)
 
+    def _storage(self):
+        from .comfort_dialogs import StorageDialog
+        from ..instances import list_instances
+        StorageDialog(list_instances(), self.settings, self).exec()
+
+    def _clear_defaults(self):
+        clear_defaults()
+        self.defaults_btn.hide()
+
     def _browse_backup(self):
         path = QFileDialog.getExistingDirectory(self, tr("Backup-Ordner wählen"), self.backup_dir.text())
         if path:
@@ -334,7 +369,69 @@ class SettingsDialog(QDialog):
         s.backup_screenshots = self.bak_screens.isChecked()
         s.ram_mb = self.ram.value()
         s.java_path = self.java.text().strip()
-        s.curseforge_api_key = self.cf_key.text().strip()
-        s.ms_client_id = self.ms_client.text().strip()
+        s.set_key("curseforge_api_key", self.cf_key.text())
+        s.set_key("ms_client_id", self.ms_client.text())
+        s.set_key("discord_client_id", self.discord_id.text())
+        s.minimize_on_launch = self.minimize.isChecked()
+        s.discord_rpc = self.discord.isChecked()
         s.save()
+        self.accept()
+
+
+class InstanceSettingsDialog(QDialog):
+    """Einstellungen nur für eine Instanz: Arbeitsspeicher, Java, Java-Argumente."""
+
+    def __init__(self, instance, settings, parent=None):
+        super().__init__(parent)
+        self.instance = instance
+        self.setWindowTitle(tr("Einstellungen – {name}").format(name=instance.name))
+        self.setMinimumWidth(560)
+        form = QFormLayout(self)
+
+        self.own_ram = QCheckBox(tr("Eigenen Arbeitsspeicher für diese Instanz festlegen"))
+        self.own_ram.setChecked(instance.ram_mb > 0)
+        form.addRow(self.own_ram)
+        self.ram = RamSlider(instance.ram_mb or settings.ram_mb)
+        self.ram.setEnabled(self.own_ram.isChecked())
+        self.own_ram.toggled.connect(self.ram.setEnabled)
+        form.addRow(tr("Arbeitsspeicher"), self.ram)
+        global_hint = QLabel(tr("Sonst gilt die allgemeine Einstellung ({gb} GB).").format(
+            gb=f"{settings.ram_mb / 1024:.1f}"))
+        global_hint.setObjectName("hint")
+        form.addRow(global_hint)
+
+        self.java = QLineEdit(instance.java_path)
+        self.java.setPlaceholderText(settings.java_path or tr("leer = allgemeine Einstellung"))
+        browse = QPushButton("…")
+        browse.setFixedWidth(36)
+        browse.clicked.connect(self._browse_java)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.java, 1)
+        row.addWidget(browse)
+        wrap = QWidget()
+        wrap.setLayout(row)
+        form.addRow(tr("Java"), wrap)
+
+        self.args = QLineEdit(instance.jvm_args)
+        self.args.setPlaceholderText(tr("z.B. -XX:+UseG1GC (nur für Profis)"))
+        form.addRow(tr("Java-Argumente"), self.args)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def _browse_java(self):
+        path, _ = QFileDialog.getOpenFileName(self, tr("java.exe auswählen"), "",
+                                              tr("Java (java.exe javaw.exe);;Alle Dateien (*)"))
+        if path:
+            self.java.setText(path)
+
+    def _save(self):
+        inst = self.instance
+        inst.ram_mb = self.ram.value() if self.own_ram.isChecked() else 0
+        inst.java_path = self.java.text().strip()
+        inst.jvm_args = self.args.text().strip()
+        inst.save()
         self.accept()

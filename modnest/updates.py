@@ -28,7 +28,11 @@ def check_updates(instance: Instance, settings) -> list[Update]:
     updates: list[Update] = []
     for kind in KINDS:
         content = instance.content[kind]
-        candidates = [m for m in content.items if m.project_id and m.source != "local" and not m.pinned]
+        # Mods eines fertigen Modpacks werden über das Modpack aktualisiert, nicht einzeln
+        pack_files = set((instance.pack or {}).get("files", []))
+        folder = KINDS[kind]["folder"]
+        candidates = [m for m in content.items if m.project_id and m.source != "local" and not m.pinned
+                      and f"{folder}/{m.file}" not in pack_files]
         # Modrinth: alle Dateien in einer Anfrage über ihre SHA1-Prüfsumme
         modrinth_items = {}
         for m in candidates:

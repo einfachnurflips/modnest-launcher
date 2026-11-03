@@ -77,6 +77,8 @@ def _release_from_version(v: dict) -> Release:
         date=v.get("date_published", ""),
         game_versions=v.get("game_versions", []),
         loaders=v.get("loaders", []),
+        sha1=(primary.get("hashes") or {}).get("sha1", ""),
+        changelog=v.get("changelog") or "",
     )
 
 

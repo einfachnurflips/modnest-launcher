@@ -8,12 +8,16 @@ import hashlib
 import json
 import re
 import shutil
+import time
 import zipfile
+from dataclasses import dataclass, field
 from pathlib import Path
+
+import requests
 
 from .categorize import guess_category
 from .instances import KINDS, Instance, Mod, create_instance
-from .sources.base import SourceError, download, session
+from .sources.base import DownloadJob, SourceError, download, download_many, session
 from .sources.curseforge import API as CF_API, CLASS_IDS
 from .sources.modrinth import API as MODRINTH_API
 from .i18n import tr
@@ -22,6 +26,16 @@ MR_LOADER_KEYS = {"fabric": "fabric-loader", "quilt": "quilt-loader", "forge": "
 # Ordner, die als Overrides mitgenommen werden (Einstellungen der Mods usw.)
 OVERRIDE_DIRS = ("config", "kubejs", "defaultconfigs", "scripts")
 OVERRIDE_FILES = ("options.txt", "servers.dat")
+@dataclass
+class ManualFile:
+    """Datei, die der Autor nur über die Webseite freigibt (CurseForge)."""
+    name: str
+    filename: str
+    folder: str
+    url: str
+    sha1: str = ""
+
+
 ALLOWED_DOWNLOAD_HOSTS = ("cdn.modrinth.com", "github.com", "raw.githubusercontent.com", "gitlab.com",
                           "edge.forgecdn.net", "mediafilez.forgecdn.net")
 
@@ -211,19 +225,6 @@ def _safe_target(base: Path, rel: str) -> Path:
     return target
 
 
-def _extract_overrides(zf: zipfile.ZipFile, prefixes: tuple[str, ...], dest: Path) -> None:
-    for member in zf.infolist():
-        for prefix in prefixes:
-            if member.filename.startswith(prefix + "/") and not member.is_dir():
-                rel = member.filename[len(prefix) + 1:]
-                if not rel:
-                    continue
-                out = _safe_target(dest, rel)
-                out.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(member) as src, open(out, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-
-
 def _apply_modrinth_metadata(instance: Instance) -> None:
     """Ergänzt Name, Icon und Kategorie der Dateien über Modrinth (per Prüfsumme)."""
     by_sha = {}
@@ -260,123 +261,300 @@ def _apply_modrinth_metadata(instance: Instance) -> None:
         item.category = guess_category(cats, instance.content[kind].category_names(), kind)
 
 
-def import_pack(path: Path, settings, progress=lambda *a: None, name: str | None = None) -> Instance:
-    kind = detect_pack(path)
-    if kind is None:
-        raise SourceError(tr("Diese Datei ist kein Modpack (.mrpack oder CurseForge-ZIP)."))
-    with zipfile.ZipFile(path) as zf:
-        if kind == "mrpack":
-            return _import_mrpack(zf, settings, progress, name)
-        return _import_curseforge(zf, settings, progress, name)
+@dataclass
+class PlanFile:
+    """Eine Datei, die direkt an ihren Platz in der Instanz geladen wird."""
+    rel: str
+    url: str
+    sha1: str = ""
+    md5: str = ""
+    label: str = ""
 
 
-def _new_instance(name: str, mc: str, loader: str, loader_version: str) -> Instance:
-    inst = create_instance(name, mc, loader)
-    inst.loader_version = loader_version
-    inst.save()
+@dataclass
+class Archive:
+    """Ein ZIP, dessen Inhalt (ab prefix) in die Instanz entpackt wird – lokal (path) oder per url."""
+    path: Path | None = None
+    url: str = ""
+    sha1: str = ""
+    md5: str = ""
+    prefix: str = ""       # Unterordner im ZIP, z.B. "overrides" ("" = alles)
+    dest: str = ""         # Zielordner in der Instanz ("" = Hauptordner)
+
+
+@dataclass
+class MetaInfo:
+    """Bekannte Infos zu einer Datei (Name, Icon, Quelle), damit sie hübsch in der Liste steht."""
+    name: str
+    source: str
+    project_id: str
+    version_id: str = ""
+    version_name: str = ""
+    icon_url: str = ""
+    url: str = ""
+    description: str = ""
+    categories: list = field(default_factory=list)
+
+
+@dataclass
+class PackPlan:
+    """Bauplan eines Modpacks – unabhängig davon, von welcher Plattform es stammt."""
+    name: str
+    mc_version: str
+    loader: str = "vanilla"
+    loader_version: str = ""
+    files: list = field(default_factory=list)          # PlanFile
+    archives: list = field(default_factory=list)       # Archive
+    manual: list = field(default_factory=list)         # ManualFile
+    meta: dict = field(default_factory=dict)           # rel-Pfad → MetaInfo
+    icon_url: str = ""
+    ram_mb: int = 0                                    # empfohlener Arbeitsspeicher
+    finalize: object = None                            # optional: fn(instance, plan) nach dem Entpacken
+
+
+# Dateien, die bei einem Update nicht überschrieben werden (deine Einstellungen)
+KEEP_ON_UPDATE = {"options.txt", "optionsof.txt", "optionsshaders.txt", "servers.dat"}
+
+
+def _rel(base: Path, path: Path) -> str:
+    return path.resolve().relative_to(base.resolve()).as_posix()
+
+
+def _extract(zf: zipfile.ZipFile, prefix: str, dest: Path, base: Path, skip_existing: set) -> list:
+    """Entpackt Einträge unter prefix nach dest; gibt die geschriebenen Pfade relativ zu base zurück."""
+    written = []
+    prefix = prefix.strip("/")
+    for member in zf.infolist():
+        if member.is_dir():
+            continue
+        name = member.filename.replace(chr(92), "/")
+        if prefix:
+            if not name.startswith(prefix + "/"):
+                continue
+            name = name[len(prefix) + 1:]
+        if not name.strip("/"):
+            continue
+        out = _safe_target(dest, name)
+        rel = _rel(base, out)
+        if rel in skip_existing and out.exists():
+            continue
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(member) as src, open(out, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        written.append(rel)
+    return written
+
+
+def backup_before_update(inst: Instance, settings) -> Path:
+    """Sichert Mods, Configs und instance.json vor einem Modpack-Update als ZIP."""
+    from .backup import backup_root
+    folder = backup_root(settings) / "Modpack-Updates"
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    target = folder / f"{re.sub(r'[^A-Za-z0-9 _.-]', '_', inst.name)}_{stamp}.zip"
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as zf:
+        for sub in ("mods", "config", "defaultconfigs", "kubejs", "resourcepacks", "shaderpacks"):
+            folder_path = inst.path / sub
+            if folder_path.is_dir():
+                for file in folder_path.rglob("*"):
+                    if file.is_file():
+                        zf.write(file, file.relative_to(inst.path).as_posix())
+        for name in ("instance.json", "options.txt"):
+            if (inst.path / name).is_file():
+                zf.write(inst.path / name, name)
+    return target
+
+
+def build_instance(plan: PackPlan, settings, progress=lambda *a: None, name: str | None = None,
+                   origin: dict | None = None, instance: Instance | None = None) -> Instance:
+    """Legt aus einem Bauplan eine Instanz an – oder aktualisiert eine bestehende (instance=…).
+
+    Bei einem Update werden alte Dateien des Packs entfernt; deine eigenen Mods, Welten und
+    Einstellungen bleiben erhalten.
+    """
+    updating = instance is not None
+    inst = instance or create_instance(name or plan.name or "Modpack", plan.mc_version, plan.loader)
+    work = inst.path / ".modnest-tmp"
+    old_files = set((inst.pack or {}).get("files", [])) if updating else set()
+    old_disabled = {rel for rel in old_files if (inst.path / (rel + ".disabled")).exists()}
+    old_by_project = {}
+    if updating:
+        for kind in KINDS:
+            for item in inst.content[kind].items:
+                if item.project_id:
+                    old_by_project[(item.source, item.project_id)] = item.category
+    try:
+        work.mkdir(exist_ok=True)
+        jobs = [DownloadJob(f.url, _safe_target(inst.path, f.rel), f.sha1, f.label, f.md5) for f in plan.files]
+        for n, arc in enumerate(plan.archives):
+            if arc.path is None:
+                arc.path = work / f"archive-{n}.zip"
+                jobs.append(DownloadJob(arc.url, arc.path, arc.sha1, Path(arc.url.split("?")[0]).name, arc.md5))
+        download_many(jobs, progress)
+        written = {_rel(inst.path, _safe_target(inst.path, f.rel)) for f in plan.files}
+        progress(tr("Entpacke Dateien …"), 0, 0)
+        skip = KEEP_ON_UPDATE if updating else set()
+        for arc in plan.archives:
+            with zipfile.ZipFile(arc.path) as zf:
+                dest = _safe_target(inst.path, arc.dest) if arc.dest else inst.path
+                written.update(_extract(zf, arc.prefix, dest, inst.path, skip))
+        # Alte Pack-Dateien entfernen, die es in der neuen Version nicht mehr gibt
+        for rel in old_files - written:
+            for candidate in (inst.path / rel, inst.path / (rel + ".disabled")):
+                if candidate.is_file():
+                    candidate.unlink()
+        # Von dir deaktivierte Pack-Mods bleiben deaktiviert
+        for rel in old_disabled & written:
+            path = inst.path / rel
+            if path.exists():
+                path.replace(inst.path / (rel + ".disabled"))
+        if plan.finalize:
+            plan.finalize(inst, plan)
+        if (inst.mc_version, inst.loader, inst.loader_version) != (plan.mc_version, plan.loader, plan.loader_version):
+            inst.version_id = ""
+        inst.mc_version, inst.loader, inst.loader_version = plan.mc_version, plan.loader, plan.loader_version
+        if not updating and plan.ram_mb > settings.ram_mb:
+            inst.ram_mb = plan.ram_mb
+        inst.pack = dict(origin or {})
+        inst.pack["files"] = sorted(written)
+        icon = inst.path / "icon.png"
+        if not inst.icon and plan.icon_url and not icon.exists():
+            try:
+                download(plan.icon_url, icon, retries=1)
+            except Exception:  # noqa: BLE001 – das Icon ist nur Deko
+                pass
+        if icon.exists() and not inst.icon:
+            inst.icon = "icon.png"
+        inst.sync_with_disk()
+        _apply_meta(inst, plan.meta)
+        progress(tr("Ergänze Mod-Infos …"), 0, 0)
+        try:
+            _apply_modrinth_metadata(inst)
+        except (OSError, ValueError, SourceError, requests.RequestException):
+            pass
+        for kind in KINDS:
+            for item in inst.content[kind].items:
+                old = old_by_project.get((item.source, item.project_id)) if item.project_id else None
+                if old and old in inst.content[kind].category_names():
+                    item.category = old
+        inst.save()
+    except BaseException:
+        if not updating:
+            shutil.rmtree(inst.path, ignore_errors=True)
+        raise
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    inst.import_manual = plan.manual
     return inst
 
 
-def _import_mrpack(zf: zipfile.ZipFile, settings, progress, name) -> Instance:
-    index = json.loads(zf.read("modrinth.index.json"))
+def _apply_meta(inst: Instance, meta: dict) -> None:
+    for kind, info in KINDS.items():
+        cs = inst.content[kind]
+        for item in cs.items:
+            known = meta.get(f"{info['folder']}/{item.file}")
+            if known is None or item.source != "local":
+                continue
+            item.name, item.source, item.project_id = known.name, known.source, known.project_id
+            item.version_id, item.version_name = known.version_id, known.version_name
+            item.icon_url, item.url, item.description = known.icon_url, known.url, known.description
+            if known.categories:
+                item.category = guess_category(known.categories, cs.category_names(), kind)
+
+
+def plan_mrpack(path: Path) -> PackPlan:
+    with zipfile.ZipFile(path) as zf:
+        index = json.loads(zf.read("modrinth.index.json"))
     deps = index.get("dependencies", {})
     loader, loader_version = "vanilla", ""
     for key, value in MR_LOADER_KEYS.items():
         if value in deps:
             loader, loader_version = key, deps[value]
-    inst = _new_instance(name or index.get("name", "Importiertes Modpack"), deps.get("minecraft", ""), loader, loader_version)
-    try:
-        files = [f for f in index.get("files", []) if (f.get("env") or {}).get("client", "required") != "unsupported"]
-        for n, f in enumerate(files, 1):
-            target = _safe_target(inst.path, f["path"])
-            target.parent.mkdir(parents=True, exist_ok=True)
-            url = next((u for u in f.get("downloads", []) if any(h in u for h in ALLOWED_DOWNLOAD_HOSTS)), None)
-            if not url:
-                continue
-            progress(tr("Lade {file} ({n}/{total}) …").format(file=target.name, n=n, total=len(files)), n, len(files))
-            download(url, target)
-            if hashlib.sha1(target.read_bytes()).hexdigest() != f.get("hashes", {}).get("sha1", ""):
-                target.unlink(missing_ok=True)
-                raise SourceError(tr("Prüfsumme von {file} stimmt nicht – Download abgebrochen.").format(file=target.name))
-        progress(tr("Entpacke Overrides …"), 0, 0)
-        _extract_overrides(zf, ("overrides", "client-overrides"), inst.path)
-        _finish_import(inst, progress)
-    except Exception:
-        shutil.rmtree(inst.path, ignore_errors=True)
-        raise
-    return inst
+    plan = PackPlan(name=index.get("name", "Modpack"), mc_version=deps.get("minecraft", ""),
+                    loader=loader, loader_version=loader_version)
+    for f in index.get("files", []):
+        if (f.get("env") or {}).get("client", "required") == "unsupported":
+            continue
+        url = next((u for u in f.get("downloads", []) if any(h in u for h in ALLOWED_DOWNLOAD_HOSTS)), None)
+        if url:
+            plan.files.append(PlanFile(f["path"], url, f.get("hashes", {}).get("sha1", "")))
+    plan.archives = [Archive(path=path, prefix="overrides"), Archive(path=path, prefix="client-overrides")]
+    return plan
 
 
-def _import_curseforge(zf: zipfile.ZipFile, settings, progress, name) -> Instance:
-    manifest = json.loads(zf.read("manifest.json"))
+def cf_sha1(info: dict) -> str:
+    return next((h.get("value", "") for h in info.get("hashes", []) if h.get("algo") == 1), "")
+
+
+def cf_resolve_files(file_ids: list, mod_ids: list, key: str) -> tuple:
+    """Holt Datei- und Projekt-Infos von CurseForge (in Blöcken)."""
+    headers = {"x-api-key": key}
+    files, mods = {}, {}
+    for i in range(0, len(file_ids), 500):
+        r = session.post(f"{CF_API}/mods/files", json={"fileIds": file_ids[i:i + 500]}, headers=headers, timeout=30)
+        r.raise_for_status()
+        files.update({f["id"]: f for f in r.json()["data"]})
+    ids = list(dict.fromkeys(mod_ids))
+    for i in range(0, len(ids), 500):
+        r = session.post(f"{CF_API}/mods", json={"modIds": ids[i:i + 500]}, headers=headers, timeout=30)
+        r.raise_for_status()
+        mods.update({m["id"]: m for m in r.json()["data"]})
+    return files, mods
+
+
+def cf_add_files(plan: PackPlan, entries: list, key: str, default_folder: str = "mods") -> None:
+    """Fügt CurseForge-Dateien [(Projekt-ID, Datei-ID)] zum Bauplan hinzu."""
+    if not entries:
+        return
+    file_info, mod_info = cf_resolve_files([f for _, f in entries], [p for p, _ in entries], key)
+    folders = {cid: KINDS[k]["folder"] for k, cid in CLASS_IDS.items()}
+    for project_id, file_id in entries:
+        info = file_info.get(file_id)
+        mod = mod_info.get(project_id, {})
+        if not info:
+            continue
+        folder = folders.get(mod.get("classId"), default_folder)
+        rel = f"{folder}/{info['fileName']}"
+        page = (mod.get("links") or {}).get("websiteUrl", "").rstrip("/")
+        if not info.get("downloadUrl"):
+            plan.manual.append(ManualFile(name=mod.get("name", info["fileName"]), filename=info["fileName"],
+                                          folder=folder, url=f"{page}/files/{file_id}" if page else "",
+                                          sha1=cf_sha1(info)))
+            continue
+        plan.files.append(PlanFile(rel, info["downloadUrl"], cf_sha1(info), label=mod.get("name", "")))
+        plan.meta[rel] = MetaInfo(
+            name=mod.get("name", info["fileName"]), source="curseforge", project_id=str(project_id),
+            version_id=str(file_id), version_name=info.get("displayName", ""),
+            icon_url=(mod.get("logo") or {}).get("thumbnailUrl", ""), url=page,
+            description=mod.get("summary", ""), categories=[c.get("name", "") for c in mod.get("categories", [])])
+
+
+def plan_curseforge(path: Path, key: str) -> PackPlan:
+    with zipfile.ZipFile(path) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
     mc = manifest.get("minecraft", {})
     loader, loader_version = "vanilla", ""
     for entry in mc.get("modLoaders", []):
         lid = entry.get("id", "")
-        for key in ("neoforge", "fabric", "quilt", "forge"):
-            if lid.startswith(key + "-"):
-                loader, loader_version = key, lid[len(key) + 1:]
+        for k in ("neoforge", "fabric", "quilt", "forge"):
+            if lid.startswith(k + "-"):
+                loader, loader_version = k, lid[len(k) + 1:]
                 break
         if loader != "vanilla":
             break
     files = manifest.get("files", [])
-    key = settings.curseforge_api_key.strip()
     if files and not key:
         raise SourceError(tr("Für CurseForge-Modpacks wird ein CurseForge-API-Key benötigt (⚙ Einstellungen)."))
-    inst = _new_instance(name or manifest.get("name", "Importiertes Modpack"), mc.get("version", ""), loader, loader_version)
-    manual: list[str] = []
-    try:
-        if files:
-            headers = {"x-api-key": key}
-            file_ids = [f["fileID"] for f in files]
-            mod_ids = [f["projectID"] for f in files]
-            r = session.post(f"{CF_API}/mods/files", json={"fileIds": file_ids}, headers=headers, timeout=30)
-            r.raise_for_status()
-            file_info = {f["id"]: f for f in r.json()["data"]}
-            r = session.post(f"{CF_API}/mods", json={"modIds": mod_ids}, headers=headers, timeout=30)
-            r.raise_for_status()
-            mod_info = {m["id"]: m for m in r.json()["data"]}
-            folders = {cid: KINDS[k]["folder"] for k, cid in CLASS_IDS.items()}
-            for n, entry in enumerate(files, 1):
-                info = file_info.get(entry["fileID"])
-                mod = mod_info.get(entry["projectID"], {})
-                if not info:
-                    continue
-                folder = folders.get(mod.get("classId"), "mods")
-                if not info.get("downloadUrl"):
-                    manual.append(mod.get("name", info.get("fileName", "?")))
-                    continue
-                target = _safe_target(inst.path, f"{folder}/{info['fileName']}")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                progress(tr("Lade {file} ({n}/{total}) …").format(file=info["fileName"], n=n, total=len(files)), n, len(files))
-                download(info["downloadUrl"], target)
-                kind = next((k for k, v in KINDS.items() if v["folder"] == folder), "mods")
-                inst.content[kind].items.append(Mod(
-                    file=info["fileName"], name=mod.get("name", info["fileName"]), source="curseforge",
-                    project_id=str(mod.get("id", "")), version_id=str(info["id"]),
-                    version_name=info.get("displayName", ""), icon_url=(mod.get("logo") or {}).get("thumbnailUrl", ""),
-                    url=(mod.get("links") or {}).get("websiteUrl", ""), description=mod.get("summary", ""),
-                    category=guess_category([c.get("name", "") for c in mod.get("categories", [])],
-                                            inst.content[kind].category_names(), kind),
-                ))
-        progress(tr("Entpacke Overrides …"), 0, 0)
-        _extract_overrides(zf, (manifest.get("overrides") or "overrides",), inst.path)
-        _finish_import(inst, progress)
-    except Exception:
-        shutil.rmtree(inst.path, ignore_errors=True)
-        raise
-    inst.import_manual = manual  # Mods, die manuell geladen werden müssen
-    return inst
+    plan = PackPlan(name=manifest.get("name", "Modpack"), mc_version=mc.get("version", ""),
+                    loader=loader, loader_version=loader_version)
+    cf_add_files(plan, [(int(f["projectID"]), int(f["fileID"])) for f in files if f.get("required", True)], key)
+    plan.archives = [Archive(path=path, prefix=manifest.get("overrides") or "overrides")]
+    return plan
 
 
-def _finish_import(inst: Instance, progress) -> None:
-    icon = inst.path / "icon.png"
-    if icon.exists():
-        inst.icon = "icon.png"
-    inst.sync_with_disk()
-    progress(tr("Ergänze Mod-Infos …"), 0, 0)
-    try:
-        _apply_modrinth_metadata(inst)
-    except (OSError, ValueError):
-        pass
-    inst.save()
+def import_pack(path: Path, settings, progress=lambda *a: None, name: str | None = None) -> Instance:
+    kind = detect_pack(path)
+    if kind is None:
+        raise SourceError(tr("Diese Datei ist kein Modpack (.mrpack oder CurseForge-ZIP)."))
+    plan = plan_mrpack(path) if kind == "mrpack" else plan_curseforge(path, settings.curseforge_api_key.strip())
+    return build_instance(plan, settings, progress, name)

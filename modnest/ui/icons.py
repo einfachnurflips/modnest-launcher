@@ -128,6 +128,6 @@ def reset_instance_icon(inst) -> None:
     inst.save()
 
 
-def save_ico(path) -> None:
-    """Speichert das Logo als .ico (für die Desktop-Verknüpfung)."""
-    logo_pixmap(256).save(str(path), "ICO")
+def save_ico(path, pixmap: QPixmap | None = None) -> None:
+    """Speichert das Logo (oder ein anderes Bild) als .ico für Desktop-Verknüpfungen."""
+    (pixmap if pixmap is not None and not pixmap.isNull() else logo_pixmap(256)).save(str(path), "ICO")

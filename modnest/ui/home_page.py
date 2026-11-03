@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from .. import news, updates, worlds
+from .. import packs, news, updates, worlds
 from ..instances import LOADERS
 from .fmt import ago, duration
 from .icons import instance_icon, logo_pixmap
@@ -45,6 +45,9 @@ class HomePage(QWidget):
     joinWorld = Signal(object, str)                # Instance, Ordner
     joinServer = Signal(object, str)               # Instance, Adresse
     updateRequested = Signal(object, list)         # Instance, [Update]
+    packUpdateRequested = Signal(object, object, object)  # Instance, PackInfo, PackVersion
+    changelogRequested = Signal(object)            # Update
+    launcherUpdateRequested = Signal(object)       # Info zur neuen ModNest-Version
     patchNotesRequested = Signal(object)           # NewsItem
     newInstanceRequested = Signal()
     importRequested = Signal()
@@ -57,6 +60,7 @@ class HomePage(QWidget):
         self.focus = None
         self._news = None
         self._updates: dict[str, list] = {}
+        self._pack_updates: dict[str, tuple | None] = {}
         self._launcher_update = None
         self._req = 0
         self.display_name = ""
@@ -96,7 +100,7 @@ class HomePage(QWidget):
         cols.addWidget(self.servers_box, 1)
         self.layout_.addLayout(cols)
 
-        self.updates_box, self.updates_list = self._section(tr("⬆  Mod-Updates"))
+        self.updates_box, self.updates_list = self._section(tr("⬆  Updates"))
         self.layout_.addWidget(self.updates_box)
 
         news_head = QHBoxLayout()
@@ -154,10 +158,15 @@ class HomePage(QWidget):
             self.banner.hide()
             return
         self.banner_layout.addWidget(_label(tr("🎉  ModNest {v} ist verfügbar!").format(v=info["version"]), "cardtitle"), 1)
-        btn = QPushButton(tr("Auf GitHub ansehen"))
-        btn.setObjectName("primary")
-        btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(info["url"])))
-        self.banner_layout.addWidget(btn)
+        from ..updater import is_installed_exe
+        page = QPushButton(tr("Was ist neu?"))
+        page.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(info["url"])))
+        self.banner_layout.addWidget(page)
+        if is_installed_exe() and info.get("setup_url"):
+            btn = QPushButton(tr("⬆  Jetzt aktualisieren"))
+            btn.setObjectName("primary")
+            btn.clicked.connect(lambda: self.launcherUpdateRequested.emit(info))
+            self.banner_layout.addWidget(btn)
         self.banner.show()
 
     def _build_hero(self) -> None:
@@ -299,14 +308,33 @@ class HomePage(QWidget):
         if key not in self._updates:
             self._updates[key] = None
             self.updates_list.addWidget(_label(tr("Suche Updates für „{name}“ …").format(name=inst.name), "hint"))
-            run_task(lambda: updates.check_updates(inst, self.settings),
-                     lambda res, k=key: self._updates_done(k, res),
-                     lambda err, k=key: self._updates_done(k, []))
+            def work(inst=inst):
+                pack_update = None
+                if inst.pack:
+                    try:
+                        pack_update = packs.check_update(inst, self.settings)
+                    except Exception:  # noqa: BLE001 – Modpack-Server nicht erreichbar
+                        pack_update = None
+                return updates.check_updates(inst, self.settings), pack_update
+
+            run_task(work, lambda res, k=key: self._updates_done(k, res),
+                     lambda err, k=key: self._updates_done(k, ([], None)))
             return
         found = self._updates[key]
         if found is None:
             self.updates_list.addWidget(_label(tr("Suche Updates für „{name}“ …").format(name=inst.name), "hint"))
             return
+        pack_up = self._pack_updates.get(key)
+        if pack_up:
+            pack, version = pack_up
+            btn = QPushButton(tr("Modpack aktualisieren"))
+            btn.setObjectName("primary")
+            btn.clicked.connect(lambda: self._pack_update_clicked(inst, pack, version))
+            sub = tr("Modpack-Update: {old}  →  {new}  ·  deine Welten, Einstellungen und eigenen Mods bleiben erhalten").format(
+                old=inst.pack.get("version_name", "?"), new=version.name)
+            icon = self._row(self.updates_list, None, f"📦  {pack.name}", sub, btn)
+            if pack.icon_url:
+                self.icon_loader.load(pack.icon_url, lambda pix, l=icon: self._set_icon(l, pix))
         head = QHBoxLayout()
         if not found:
             head.addWidget(_label(tr("✔  Alles aktuell in „{name}“.").format(name=inst.name), "hint"), 1)
@@ -327,7 +355,10 @@ class HomePage(QWidget):
             btn.setObjectName("small")
             btn.clicked.connect(lambda _=False, u=upd: self._update_clicked(inst, [u]))
             sub = f"{upd.item.version_name or '?'}  →  {upd.release.version_name}"
-            icon = self._row(self.updates_list, None, upd.item.name, sub, btn)
+            log = QPushButton(tr("Was ist neu?"))
+            log.setObjectName("small")
+            log.clicked.connect(lambda _=False, u=upd: self.changelogRequested.emit(u))
+            icon = self._row(self.updates_list, None, upd.item.name, sub, btn, extra=log)
             if upd.item.icon_url:
                 self.icon_loader.load(upd.item.icon_url, lambda pix, l=icon: self._set_icon(l, pix))
         if len(found) > 8:
@@ -348,14 +379,19 @@ class HomePage(QWidget):
         self._updates[key] = [u for u in (self._updates.get(key) or []) if id(u) not in done]
         self._build_updates()
 
+    def _pack_update_clicked(self, inst, pack, version) -> None:
+        self._pack_updates[str(inst.path)] = None
+        self.packUpdateRequested.emit(inst, pack, version)
+        self._build_updates()
+
     def recheck_updates(self, inst=None) -> None:
         inst = inst or self.focus
         if inst is not None:
             self._updates.pop(str(inst.path), None)
             self._build_updates()
 
-    def _updates_done(self, key: str, result: list) -> None:
-        self._updates[key] = result
+    def _updates_done(self, key: str, result: tuple) -> None:
+        self._updates[key], self._pack_updates[key] = result
         try:
             if self.focus is not None and str(self.focus.path) == key:
                 self._build_updates()

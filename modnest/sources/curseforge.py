@@ -91,6 +91,7 @@ class CurseForge:
                 date=f.get("fileDate", ""),
                 game_versions=[v for v in versions if v.lower() not in LOADER_NAMES],
                 loaders=[v.lower() for v in versions if v.lower() in LOADER_NAMES],
+                sha1=next((h.get("value", "") for h in f.get("hashes", []) if h.get("algo") == 1), ""),
             ))
         return result
 

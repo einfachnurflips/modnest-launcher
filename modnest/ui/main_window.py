@@ -9,21 +9,28 @@ from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFileDialog, QGraphicsDropShadowEffect, QHBoxLayout, QInputDialog, QLabel,
-    QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QStackedWidget,
+    QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QStackedWidget,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
-from .. import accounts, backup, crash, game, installer, modpack, news
+from .. import accounts, backup, compat, crash, discord_rpc, game, importers, installer, modpack, news, packs, shortcuts, updater
+from ..keys import DEFAULT_KEYS
 from ..config import APP_NAME, APP_VERSION, data_dir
-from ..instances import KINDS, LOADERS, create_instance, delete_instance, duplicate_instance, list_instances
-from ..sources import modrinth
+from ..instances import (
+    KINDS, LOADERS, create_instance, delete_instance, duplicate_instance, list_instances, save_defaults,
+)
+from ..sources import SourceError, modrinth
 from . import style
 from .content_page import ContentPage
-from .dialogs import DuplicateDialog, IconPickerDialog, NewInstanceDialog, SettingsDialog
+from .comfort_dialogs import ImportLaunchersDialog, LogWindow, SkinDialog
+from .instance_list import InstanceList
+from .packs_page import ManualDownloadDialog, PackVersionDialog, PacksPage
+from .tools_dialogs import ChangelogDialog, PerfDialog
+from .dialogs import DuplicateDialog, IconPickerDialog, InstanceSettingsDialog, NewInstanceDialog, SettingsDialog
 from .extra_dialogs import CrashDialog, ExportDialog, PatchNotesDialog, WorldBackupsDialog
-from .fmt import ago, duration
+from .fmt import duration
 from .home_page import HomePage
-from .icons import app_icon, instance_icon, logo_pixmap, reset_instance_icon, save_instance_icon
+from .icons import app_icon, instance_icon, logo_pixmap, reset_instance_icon, save_ico, save_instance_icon
 from .login_dialog import MicrosoftLoginDialog
 from .screenshots_page import ScreenshotsPage
 from .search_page import SearchPage
@@ -43,6 +50,7 @@ class MainWindow(QMainWindow):
         self.instance = None
         self.install_queue = []
         self.installing = False
+        self.pack_busy = False
         self.game_process = None
         self.game_instance = None
         self.game_started = 0.0
@@ -82,11 +90,17 @@ class MainWindow(QMainWindow):
         self.home.patchNotesRequested.connect(self.show_patch_notes)
         self.home.newInstanceRequested.connect(self.new_instance)
         self.home.importRequested.connect(self.import_modpack)
+        self.home.packUpdateRequested.connect(self.update_pack)
+        self.home.changelogRequested.connect(self.show_changelog)
+        self.home.launcherUpdateRequested.connect(self.update_launcher)
+        self.packs_page = PacksPage(settings, self.icon_loader)
+        self.packs_page.installRequested.connect(self.install_pack)
         self.screens = ScreenshotsPage(settings)
         self.screens.message.connect(self.status)
         self.stack.addWidget(self.home)
         self.stack.addWidget(self.screens)
         self.stack.addWidget(self._build_instance_page())
+        self.stack.addWidget(self.packs_page)
         body.addWidget(self.stack, 1)
 
         outer.addWidget(self._build_playbar())
@@ -125,7 +139,8 @@ class MainWindow(QMainWindow):
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(False)
         self.nav_buttons = {}
-        for key, text in (("home", tr("🏠   Home")), ("screens", tr("🖼   Screenshots"))):
+        for key, text in (("home", tr("🏠   Home")), ("packs", tr("📦   Modpacks")),
+                          ("screens", tr("🖼   Screenshots"))):
             btn = QPushButton(text)
             btn.setObjectName("nav")
             btn.setCheckable(True)
@@ -138,20 +153,25 @@ class MainWindow(QMainWindow):
         lbl = QLabel(tr("INSTANZEN"))
         lbl.setObjectName("section")
         section.addWidget(lbl, 1)
-        for text, tip, slot in (("📦", tr("Modpack importieren (.mrpack / CurseForge-ZIP)"), self.import_modpack),
-                                ("＋", tr("Neue Instanz"), self.new_instance)):
-            b = QPushButton(text)
-            b.setObjectName("iconbtn")
-            b.setToolTip(tip)
-            b.clicked.connect(slot)
-            section.addWidget(b)
+        imp = QPushButton("📥")
+        imp.setObjectName("iconbtn")
+        imp.setToolTip(tr("Importieren: Modpack-Datei oder Instanzen aus anderen Launchern"))
+        imp_menu = QMenu(self)
+        imp_menu.addAction(tr("📦  Modpack-Datei importieren (.mrpack / CurseForge-ZIP) …"), self.import_modpack)
+        imp_menu.addAction(tr("🔄  Aus anderen Launchern übernehmen …"), self.import_launchers)
+        imp.clicked.connect(lambda: imp_menu.exec(imp.mapToGlobal(imp.rect().bottomLeft())))
+        section.addWidget(imp)
+        new = QPushButton("＋")
+        new.setObjectName("iconbtn")
+        new.setToolTip(tr("Neue Instanz"))
+        new.clicked.connect(self.new_instance)
+        section.addWidget(new)
         sl.addLayout(section)
 
-        self.instance_list = QListWidget()
-        self.instance_list.setObjectName("instances")
-        self.instance_list.setIconSize(QSize(38, 38))
-        self.instance_list.itemClicked.connect(lambda item: self.open_instance(self.instances[self.instance_list.row(item)]))
-        self.instance_list.currentRowChanged.connect(self._row_changed)
+        self.instance_list = InstanceList()
+        self.instance_list.instanceActivated.connect(self.open_instance)
+        self.instance_list.layoutChanged.connect(self._instance_layout_changed)
+        self.instance_list.groupToggled.connect(self._toggle_group)
         self.instance_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.instance_list.customContextMenuRequested.connect(self._instance_menu_at)
         sl.addWidget(self.instance_list, 1)
@@ -213,6 +233,9 @@ class MainWindow(QMainWindow):
             cp.message.connect(self.status)
             cp.versionRequested.connect(self.change_version)
             cp.irisRequested.connect(self.install_iris)
+            cp.perfRequested.connect(self.performance_pack)
+            cp.searchRequested.connect(self.search_for)
+            cp.profileApplied.connect(self._refresh_pages)
             self.pages[kind] = cp
             self.tabs.addTab(cp, f"{TAB_ICONS[kind]}  {tr(KINDS[kind]['label'])}")
         self.search_page = SearchPage(self.settings, self.icon_loader)
@@ -241,6 +264,11 @@ class MainWindow(QMainWindow):
         status_col.addWidget(self.status_label)
         status_col.addWidget(self.progress)
         bl.addLayout(status_col, 1)
+        console = QPushButton("📜")
+        console.setObjectName("iconbtn")
+        console.setToolTip(tr("Spiel-Konsole (Live-Log)"))
+        console.clicked.connect(lambda: self.show_console(self.game_instance or self._play_target()))
+        bl.addWidget(console)
         self.account_btn = QPushButton()
         self.account_btn.setObjectName("account")
         self.account_menu = QMenu(self)
@@ -267,6 +295,10 @@ class MainWindow(QMainWindow):
             self.instance_list.clearSelection()
             self.home.refresh(self.instances, None)
             self.stack.setCurrentWidget(self.home)
+        elif key == "packs":
+            self.instance_list.clearSelection()
+            self.stack.setCurrentWidget(self.packs_page)
+            self.packs_page.activate()
         elif key == "screens":
             self.instance_list.clearSelection()
             self.screens.set_instances(self.instances)
@@ -279,35 +311,99 @@ class MainWindow(QMainWindow):
             return
         for btn in self.nav_buttons.values():
             btn.setChecked(False)
-        row = self.instances.index(inst)
-        if self.instance_list.currentRow() != row:
-            self.instance_list.setCurrentRow(row)
-        else:
-            self._select_instance(inst)
-        self.instance_list.item(row).setSelected(True)
+        if inst.group in self._collapsed():
+            self._toggle_group(inst.group)
+        self.instance_list.select(inst)
+        self._select_instance(inst)
         self.stack.setCurrentIndex(2)
         self._update_play_label()
 
-    def _row_changed(self, row: int) -> None:
-        if 0 <= row < len(self.instances):
-            self._select_instance(self.instances[row])
-            for btn in self.nav_buttons.values():
-                btn.setChecked(False)
-            self.stack.setCurrentIndex(2)
-            self._update_play_label()
+    # --- Reihenfolge & Ordner ----------------------------------------------
+    def _collapsed(self) -> set:
+        return set(self.settings.extra.get("collapsed_groups", []))
+
+    def _groups(self) -> list:
+        groups = list(self.settings.extra.get("groups", []))
+        for inst in self.instances:
+            if inst.group and inst.group not in groups:
+                groups.append(inst.group)
+        return groups
+
+    def _sorted_instances(self, instances: list) -> list:
+        order = self.settings.extra.get("instance_order", [])
+        pos = {name: i for i, name in enumerate(order)}
+        return sorted(instances, key=lambda i: (pos.get(i.path.name, len(pos)), i.name.lower()))
+
+    def _fill_instance_list(self) -> None:
+        self.instance_list.populate(self.instances, self._groups(), self._collapsed())
+        if self.instance is not None and self.stack.currentIndex() == 2:
+            self.instance_list.select(self.instance)
+
+    def _instance_layout_changed(self, layout: list) -> None:
+        by_path = {str(i.path): i for i in self.instances}
+        order = []
+        for key, group in layout:
+            inst = by_path.get(key)
+            if inst is None:
+                continue
+            order.append(inst.path.name)
+            if inst.group != group:
+                inst.group = group
+                inst.save()
+        self.settings.extra["instance_order"] = order
+        self.settings.save()
+        self.instances = self._sorted_instances(self.instances)
+        self._fill_instance_list()
+
+    def _toggle_group(self, name: str) -> None:
+        collapsed = self._collapsed()
+        collapsed ^= {name}
+        self.settings.extra["collapsed_groups"] = sorted(collapsed)
+        self.settings.save()
+        self._fill_instance_list()
+
+    def move_to_group(self, inst, group: str) -> None:
+        inst.group = group
+        inst.save()
+        groups = self._groups()
+        if group and group not in groups:
+            groups.append(group)
+        self.settings.extra["groups"] = groups
+        self.settings.save()
+        self._fill_instance_list()
+
+    def new_group_for(self, inst) -> None:
+        name, ok = QInputDialog.getText(self, tr("Neuer Ordner"), tr("Name des Ordners (z.B. Survival, Tests, Mit Freunden):"))
+        if ok and name.strip():
+            self.move_to_group(inst, name.strip())
+
+    def rename_group(self, old: str) -> None:
+        name, ok = QInputDialog.getText(self, tr("Ordner umbenennen"), tr("Neuer Name:"), text=old)
+        if not ok or not name.strip() or name.strip() == old:
+            return
+        name = name.strip()
+        for inst in self.instances:
+            if inst.group == old:
+                inst.group = name
+                inst.save()
+        self.settings.extra["groups"] = [name if g == old else g for g in self._groups()]
+        self.settings.save()
+        self._fill_instance_list()
+
+    def remove_group(self, name: str) -> None:
+        for inst in self.instances:
+            if inst.group == name:
+                inst.group = ""
+                inst.save()
+        self.settings.extra["groups"] = [g for g in self._groups() if g != name]
+        self.settings.save()
+        self._fill_instance_list()
 
     # --- Instanzen ---------------------------------------------------------
     def reload_instances(self, select: str = "", show_home: bool = False) -> None:
-        self.instances = list_instances()
-        self.instance_list.blockSignals(True)
-        self.instance_list.clear()
-        for inst in self.instances:
-            sub = f"{LOADERS.get(inst.loader, inst.loader)} · {inst.mc_version}"
-            item = QListWidgetItem(instance_icon(inst, 38), f"{inst.name}\n{sub}")
-            item.setSizeHint(QSize(0, 58))
-            item.setToolTip(tr("Zuletzt gespielt: {t}").format(t=ago(inst.last_played)))
-            self.instance_list.addItem(item)
-        self.instance_list.blockSignals(False)
+        self.instances = self._sorted_instances(list_instances())
+        self.instance = None
+        self._fill_instance_list()
         match = next((i for i in self.instances if str(i.path) == select), None)
         if match is None and self.instances:
             match = self.instances[0]
@@ -346,6 +442,11 @@ class MainWindow(QMainWindow):
         self.title.setText(inst.name)
         self.avatar_btn.setIcon(instance_icon(inst, 60))
         chips = [(f"Minecraft {inst.mc_version}", "chip"), (LOADERS.get(inst.loader, inst.loader), "chipaccent")]
+        if inst.pack:
+            chips.append((f"📦 {packs.PROVIDERS.get(inst.pack.get('provider'), '')} · {inst.pack.get('version_name', '')}",
+                          "chip"))
+        if inst.ram_mb:
+            chips.append((f"🧠 {inst.ram_mb / 1024:.1f} GB", "chip"))
         for kind, info in KINDS.items():
             count = len(inst.content[kind].items)
             if count:
@@ -360,11 +461,7 @@ class MainWindow(QMainWindow):
         for i, (kind, info) in enumerate(KINDS.items()):
             count = len(inst.content[kind].items)
             self.tabs.setTabText(i, f"{TAB_ICONS[kind]}  {tr(info['label'])}" + (f"  {count}" if count else ""))
-        row = self.instances.index(inst) if inst in self.instances else -1
-        if row >= 0:
-            item = self.instance_list.item(row)
-            item.setIcon(instance_icon(inst, 38))
-            item.setText(f"{inst.name}\n{LOADERS.get(inst.loader, inst.loader)} · {inst.mc_version}")
+        self.instance_list.update_instance(inst)
 
     def _tab_changed(self, index: int) -> None:
         page = self.tabs.widget(index)
@@ -379,7 +476,15 @@ class MainWindow(QMainWindow):
         item = self.instance_list.itemAt(pos)
         if item is None:
             return
-        self.open_instance(self.instances[self.instance_list.row(item)])
+        inst = self.instance_list.instance_at(item)
+        if inst is None:
+            name = item.data(Qt.ItemDataRole.UserRole + 1)
+            menu = QMenu(self)
+            menu.addAction(tr("✏  Ordner umbenennen …"), lambda: self.rename_group(name))
+            menu.addAction(tr("📤  Ordner auflösen"), lambda: self.remove_group(name))
+            menu.exec(self.instance_list.viewport().mapToGlobal(pos))
+            return
+        self.open_instance(inst)
         self._instance_menu().exec(self.instance_list.viewport().mapToGlobal(pos))
 
     def _instance_menu(self) -> QMenu:
@@ -389,11 +494,26 @@ class MainWindow(QMainWindow):
         menu.addAction(tr("▶  Spielen"), lambda: self.play(self.instance))
         menu.addSeparator()
         menu.addMenu(self._icon_menu())
+        groups = menu.addMenu(tr("📁  In Ordner verschieben"))
+        inst = self.instance
+        for g in self._groups():
+            act = groups.addAction(g, lambda g=g: self.move_to_group(inst, g))
+            act.setEnabled(g != inst.group)
+        groups.addAction(tr("＋ Neuer Ordner …"), lambda: self.new_group_for(inst))
+        if inst.group:
+            groups.addSeparator()
+            groups.addAction(tr("Aus Ordner entfernen"), lambda: self.move_to_group(inst, ""))
         menu.addAction(tr("✏  Umbenennen …"), self.rename_instance)
         menu.addAction(tr("⧉  Kopieren …"), self.duplicate_instance)
+        menu.addAction(tr("⚙  Instanz-Einstellungen …"), self.instance_settings)
         menu.addAction(tr("📤  Als Modpack teilen …"), self.export_modpack)
+        if self.instance.pack:
+            menu.addAction(tr("📦  Modpack-Version ändern …"), self.change_pack_version)
         menu.addAction(tr("💾  Welt-Backups …"), lambda: WorldBackupsDialog(self.instance, self.settings, self).exec())
         menu.addAction(tr("📁  Ordner öffnen"), self.open_instance_folder)
+        menu.addAction(tr("📜  Konsole / Log"), lambda: self.show_console(self.instance))
+        menu.addAction(tr("🖥  Desktop-Verknüpfung erstellen"), self.create_shortcut)
+        menu.addAction(tr("⭐  Optionen als Standard für neue Instanzen"), self.save_default_options)
         menu.addSeparator()
         menu.addAction(tr("🗑  Löschen …"), self.delete_instance)
         return menu
@@ -459,6 +579,11 @@ class MainWindow(QMainWindow):
                  lambda err: (self._done(tr("⚠ Kopieren fehlgeschlagen.")),
                               QMessageBox.warning(self, tr("Kopieren"), err)))
 
+    def instance_settings(self) -> None:
+        if self.instance and InstanceSettingsDialog(self.instance, self.settings, self).exec():
+            self.status(tr("✔ Einstellungen von „{name}“ gespeichert.").format(name=self.instance.name))
+            self._update_header()
+
     def open_instance_folder(self) -> None:
         if self.instance:
             os.startfile(self.instance.path)  # noqa: S606
@@ -516,13 +641,221 @@ class MainWindow(QMainWindow):
             self._done(tr("✔ Modpack „{name}“ importiert.").format(name=inst.name))
             self.reload_instances(select=str(inst.path))
             if manual:
-                QMessageBox.information(self, tr("Fast fertig"), tr(
-                    tr("Diese Mods erlauben keinen automatischen Download und müssen manuell von CurseForge "
-                    "geladen werden:\n\n{mods}")).format(mods="\n".join("• " + m for m in manual)))
+                ManualDownloadDialog(inst, manual, self).exec()
+                self._refresh_pages()
 
         run_task(lambda progress: modpack.import_pack(p, self.settings, progress), done,
                  lambda err: (self._done(tr("⚠ Import fehlgeschlagen.")), QMessageBox.warning(self, tr("Import"), err)),
                  self.on_progress)
+
+    def update_launcher(self, info: dict) -> None:
+        if self.game_process is not None:
+            QMessageBox.information(self, "ModNest", tr("Bitte zuerst Minecraft beenden."))
+            return
+        if QMessageBox.question(self, "ModNest", tr(
+                "ModNest {v} herunterladen und installieren?\n\nDer Launcher startet danach automatisch neu. "
+                "Deine Instanzen und Welten bleiben erhalten.").format(v=info["version"])) != QMessageBox.StandardButton.Yes:
+            return
+
+        def done(setup):
+            updater.run_setup(setup)
+            QApplication.instance().quit()
+
+        run_task(lambda progress: updater.download_setup(info, progress), done,
+                 lambda err: (self._done(tr("⚠ Update fehlgeschlagen.")), QMessageBox.warning(self, "ModNest", err)),
+                 self.on_progress)
+
+    # --- Komfort ------------------------------------------------------------
+    def _discord_id(self) -> str:
+        return self.settings.discord_client_id.strip() or DEFAULT_KEYS.get("discord_client_id", "")
+
+    def import_launchers(self) -> None:
+        dlg = ImportLaunchersDialog(self)
+        if not dlg.exec():
+            return
+        chosen, worlds = dlg.selected(), dlg.worlds.isChecked()
+        if not chosen or self._busy():
+            return
+        self.pack_busy = True
+
+        def work(progress):
+            latest = ""
+            if any(not f.mc_version for f in chosen):
+                try:
+                    latest = game.release_versions()[0]
+                except Exception:  # noqa: BLE001
+                    latest = ""
+            done, failed = [], []
+            for f in chosen:
+                progress(tr("Übernehme „{name}“ …").format(name=f.name), 0, 0)
+                try:
+                    done.append(importers.import_found(f, worlds, progress, latest))
+                except Exception as exc:  # noqa: BLE001 – andere trotzdem importieren
+                    failed.append(f"{f.name}: {exc}")
+            return done, failed
+
+        def finished(result):
+            self.pack_busy = False
+            done, failed = result
+            self._done(tr("✔ {n} Instanz(en) übernommen.").format(n=len(done)))
+            self.reload_instances(select=str(done[0].path) if done else "")
+            if failed:
+                QMessageBox.warning(self, tr("Import"), tr("Nicht übernommen:\n\n{list}").format(list="\n".join(failed)))
+
+        run_task(work, finished, lambda err: (setattr(self, "pack_busy", False), self._done(tr("⚠ Import fehlgeschlagen.")),
+                                              QMessageBox.warning(self, tr("Import"), err)), self.on_progress)
+
+    def show_console(self, inst) -> None:
+        if inst is None:
+            return
+        win = getattr(self, "_consoles", {}).get(str(inst.path))
+        if win is None:
+            win = LogWindow(inst, self)
+            self._consoles = getattr(self, "_consoles", {})
+            self._consoles[str(inst.path)] = win
+            win.finished.connect(lambda _=0, k=str(inst.path): self._consoles.pop(k, None))
+        win.show()
+        win.raise_()
+        win.activateWindow()
+
+    def create_shortcut(self) -> None:
+        inst = self.instance
+        if not inst:
+            return
+        ico = shortcuts.icon_cache_dir() / f"{inst.path.name}.ico"
+        try:
+            save_ico(ico, instance_icon(inst, 256).pixmap(256, 256))
+            link = shortcuts.create_instance_shortcut(inst, ico)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, tr("Verknüpfung"), tr("Die Verknüpfung konnte nicht erstellt werden:\n{e}").format(e=exc))
+            return
+        self.status(tr("✔ Verknüpfung „{name}“ liegt auf dem Desktop – ein Doppelklick startet die Instanz direkt.").format(
+            name=link.stem))
+
+    def save_default_options(self) -> None:
+        inst = self.instance
+        if not inst:
+            return
+        saved = save_defaults(inst)
+        if not saved:
+            QMessageBox.information(self, tr("Standard-Optionen"), tr(
+                "Diese Instanz hat noch keine Einstellungen. Starte sie einmal, stell alles ein (Tasten, Sichtweite, "
+                "Sprache …) und versuch es dann erneut."))
+            return
+        self.status(tr("✔ Neue Instanzen übernehmen ab jetzt die Einstellungen von „{name}“.").format(name=inst.name))
+
+    def change_skin(self) -> None:
+        account = self.accounts.active
+        if account is None:
+            return
+        client_id = self.settings.ms_client_id.strip()
+        store = self.accounts
+
+        def token():
+            accounts.refresh(account, client_id)
+            store.save()
+            return account.mc_token
+
+        SkinDialog(account, token, self).exec()
+
+    # --- Fertige Modpacks ---------------------------------------------------
+    def _busy(self) -> bool:
+        if self.installing or self.pack_busy:
+            QMessageBox.information(self, tr("Bitte warten"), tr("Es wird gerade schon etwas installiert."))
+            return True
+        return False
+
+    def install_pack(self, pack, version=None) -> None:
+        if self._busy():
+            return
+        self.pack_busy = True
+        settings = self.settings
+
+        def work(progress):
+            v = version
+            if v is None:
+                progress(tr("Suche neueste Version von {name} …").format(name=pack.name), 0, 0)
+                versions = packs.provider(pack.provider).versions(pack, settings)
+                if not versions:
+                    raise SourceError(tr("Für dieses Modpack gibt es keine installierbare Version."))
+                stable = [x for x in versions if x.release_type == "release"]
+                v = next((x for x in versions if x.recommended), None) or (stable or versions)[0]
+            return packs.install(pack, v, settings, progress)
+
+        def done(inst):
+            self.pack_busy = False
+            self._done(tr("✔ Modpack „{name}“ installiert.").format(name=inst.name))
+            self.reload_instances(select=str(inst.path))
+            if inst.import_manual:
+                ManualDownloadDialog(inst, inst.import_manual, self).exec()
+                self._refresh_pages()
+
+        def fail(err):
+            self.pack_busy = False
+            self._done(tr("⚠ Installation fehlgeschlagen."))
+            QMessageBox.warning(self, tr("Modpack installieren"), err)
+
+        self.on_progress(tr("Installiere {name} …").format(name=pack.name), 0, 0)
+        run_task(work, done, fail, self.on_progress)
+
+    def change_pack_version(self) -> None:
+        inst = self.instance
+        if not inst or not inst.pack:
+            return
+        self.on_progress(tr("Lade Modpack-Infos …"), 0, 0)
+
+        def got(pack):
+            self._done(tr("Bereit."))
+            if pack is None:
+                QMessageBox.warning(self, tr("Modpack"), tr("Die Herkunft dieses Modpacks ist unbekannt."))
+                return
+            dlg = PackVersionDialog(pack, self.settings, self.icon_loader, self,
+                                    current=inst.pack.get("version_id", ""),
+                                    title=tr("Modpack-Version ändern – {name}").format(name=inst.name))
+            dlg.set_ok_text(tr("Zu dieser Version wechseln"))
+            if dlg.exec() and dlg.selected is not None:
+                self.update_pack(inst, pack, dlg.selected)
+
+        run_task(lambda: packs.pack_from_instance(inst), got,
+                 lambda err: (self._done(tr("Bereit.")), QMessageBox.warning(self, tr("Modpack"), err)))
+
+    def update_pack(self, inst, pack, version) -> None:
+        if self._busy():
+            return
+        if self.game_process is not None and self.game_instance is inst:
+            QMessageBox.information(self, tr("Modpack"), tr("Bitte zuerst Minecraft beenden."))
+            return
+        question = tr("„{name}“ auf Version {version} umstellen?\n\n"
+                      "Deine Welten, Einstellungen und selbst hinzugefügten Mods bleiben erhalten. "
+                      "Vorher wird automatisch ein Backup der Mods und Configs angelegt.").format(
+            name=inst.name, version=version.name)
+        if QMessageBox.question(self, tr("Modpack aktualisieren"), question) != QMessageBox.StandardButton.Yes:
+            return
+        self.pack_busy = True
+        settings = self.settings
+
+        def done(updated):
+            self.pack_busy = False
+            self._done(tr("✔ „{name}“ ist jetzt auf Version {version}.").format(name=updated.name, version=version.name))
+            self.reload_instances(select=str(updated.path))
+            if updated.import_manual:
+                ManualDownloadDialog(updated, updated.import_manual, self).exec()
+                self._refresh_pages()
+
+        def fail(err):
+            self.pack_busy = False
+            self._done(tr("⚠ Update fehlgeschlagen."))
+            QMessageBox.warning(self, tr("Modpack aktualisieren"), tr(
+                "{e}\n\nEin Backup deiner Mods und Configs liegt im Backup-Ordner unter „Modpack-Updates“.").format(e=err))
+
+        self.on_progress(tr("Aktualisiere {name} …").format(name=inst.name), 0, 0)
+        run_task(lambda progress: packs.update(inst, pack, version, settings, progress), done, fail, self.on_progress)
+
+    def _refresh_pages(self) -> None:
+        if self.instance:
+            self.instance.sync_with_disk()
+            for page in self.pages.values():
+                page.refresh()
 
     # --- Drag & Drop -------------------------------------------------------
     def dragEnterEvent(self, event) -> None:
@@ -610,6 +943,7 @@ class MainWindow(QMainWindow):
         menu.addAction(tr("➕ Offline-Konto hinzufügen …"), self.add_offline_account)
         if active:
             menu.addSeparator()
+            menu.addAction(tr("👕  Skin & Umhang …"), self.change_skin)
             menu.addAction(tr("Abmelden: {name}").format(name=active.name), lambda: self._remove_account(active))
 
     def _switch_account(self, acc) -> None:
@@ -692,6 +1026,43 @@ class MainWindow(QMainWindow):
             self.queue_install(installer.project_from_item(upd.item, upd.kind), upd.item.category, upd.release,
                                instance=inst, pin=False)
 
+    def performance_pack(self) -> None:
+        inst = self.instance
+        if not inst:
+            return
+        dlg = PerfDialog(inst, self)
+        if not dlg.exec():
+            return
+        names = inst.content["mods"].category_names()
+        category = "Performance" if "Performance" in names else None
+        for opt in dlg.selected():
+            self.queue_install(opt.project, category, opt.release, instance=inst, pin=False)
+
+    def show_changelog(self, upd) -> None:
+        title = tr("Was ist neu? – {name} {version}").format(name=upd.item.name, version=upd.release.version_name)
+        if upd.release.changelog or upd.item.source != "curseforge":
+            ChangelogDialog(title, upd.release.changelog, self).exec()
+            return
+        settings = self.settings
+
+        def work():
+            resp = modrinth.session.get(
+                f"https://api.curseforge.com/v1/mods/{upd.item.project_id}/files/{upd.release.version_id}/changelog",
+                headers={"x-api-key": settings.curseforge_api_key.strip()}, timeout=20)
+            resp.raise_for_status()
+            return resp.json().get("data", "")
+
+        self.status(tr("Lade Changelog …"))
+        run_task(work, lambda html: (self._done(tr("Bereit.")), ChangelogDialog(title, html, self, markdown=False).exec()),
+                 lambda err: (self._done(tr("Bereit.")), ChangelogDialog(title, "", self).exec()))
+
+    def search_for(self, query: str) -> None:
+        """Öffnet „Entdecken“ mit einem Suchbegriff (z.B. eine fehlende Abhängigkeit)."""
+        self.tabs.setCurrentWidget(self.search_page)
+        self.search_page.set_kind("mods")
+        self.search_page.query.setText(query)
+        self.search_page.search()
+
     def install_iris(self) -> None:
         self.status(tr("Suche Iris auf Modrinth …"))
         run_task(lambda: modrinth.get_project("iris", "mods"),
@@ -730,6 +1101,17 @@ class MainWindow(QMainWindow):
             self.search_page.mark_installed()
             self._update_header()
         self._next_install()
+        if not self.install_queue and not self.installing:
+            self._quick_compat(inst)
+
+    def _quick_compat(self, inst) -> None:
+        """Prüft nach Installationen still im Hintergrund und meldet nur echte Probleme."""
+        def done(issues):
+            errors = [i for i in issues if i.severity == "error"]
+            if errors:
+                self.status(tr("⚠ {n} Problem(e) in „{name}“ gefunden: {first} – Details unter Mods → 🩺 Prüfen").format(
+                    n=len(errors), name=inst.name, first=errors[0].title))
+        run_task(lambda: compat.check(inst), done, lambda err: None)
 
     def show_patch_notes(self, item) -> None:
         self.status(tr("Lade Patch-Notes …"))
@@ -790,6 +1172,12 @@ class MainWindow(QMainWindow):
                 where = tr(" → {target}").format(target=quick_play[1])
             self._done(tr("Minecraft läuft ({name}){where}.").format(name=inst.name, where=where))
             self.game_timer.start(2000)
+            if self.settings.discord_rpc:
+                discord_rpc.set_playing(self._discord_id(), inst.name,
+                                        f"{LOADERS.get(inst.loader, inst.loader)} {inst.mc_version}",
+                                        quick_play[1] if quick_play and quick_play[0] == "server" else "")
+            if self.settings.minimize_on_launch:
+                self.showMinimized()
 
         def fail(err):
             self._reset_play()
@@ -811,6 +1199,10 @@ class MainWindow(QMainWindow):
         if inst is self.instance:
             self._update_header()
         self.status(tr("Minecraft wurde beendet – {t} gespielt.").format(t=duration(int(time.time() - started))))
+        discord_rpc.clear(self._discord_id())
+        if self.isMinimized():
+            self.showNormal()
+            self.activateWindow()
         self._after_game_backups(inst, started)
         if code not in (0, None) and time.time() - started > 3:
             info = crash.analyze(inst.path, started)

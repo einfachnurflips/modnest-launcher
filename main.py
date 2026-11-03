@@ -3,6 +3,7 @@
 Aufruf:
     pythonw main.py                    Launcher starten
     python main.py --create-shortcuts  Verknüpfungen (Ordner + Desktop) ohne Konsolenfenster anlegen
+    pythonw main.py --play "Ordner"    eine Instanz direkt starten (für Desktop-Verknüpfungen)
 """
 import subprocess
 import sys
@@ -45,6 +46,7 @@ def main() -> int:
     from modnest.ui.splash import Splash
     from modnest.ui.style import build_style
 
+    first_run = not (data_dir() / "settings.json").exists()
     settings = Settings.load()
     set_language(settings.language)
     # Qt-Standardtexte (z.B. „Speichern“/„Abbrechen“) in der gewählten Sprache
@@ -63,6 +65,19 @@ def main() -> int:
     splash.step(tr("Lade Einstellungen …"), 15, 250)
     app.setStyleSheet(build_style(data_dir(), settings.theme))
 
+    next_step = ""
+    if first_run:
+        splash.hide()
+        from modnest.ui.wizard import SetupWizard
+        wizard = SetupWizard(settings)
+        wizard.exec()
+        next_step = wizard.next_step
+        app.setStyleSheet(build_style(data_dir(), settings.theme))
+        if qt_translator.load(f"qtbase_{settings.language}",
+                              QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+            app.installTranslator(qt_translator)
+        splash.show()
+
     splash.step(tr("Lade Module …"), 40, 250)
     from modnest.ui.main_window import MainWindow  # noqa: E402 – schwerer Import, erst nach dem Splash
 
@@ -71,11 +86,36 @@ def main() -> int:
 
     splash.step(tr("Fertig!"), 100, 300)
     splash.finish(window)
+    if next_step == "packs":
+        window.show_page("packs")
+    elif next_step == "new":
+        window.new_instance()
+    elif next_step == "import":
+        window.import_launchers()
+    play = _arg("--play")
+    if play:
+        inst = next((i for i in window.instances if i.path.name == play or i.name == play), None)
+        if inst is not None:
+            window.play(inst)
     return app.exec()
+
+
+def _arg(name: str) -> str:
+    if name in sys.argv:
+        idx = sys.argv.index(name)
+        if idx + 1 < len(sys.argv):
+            return sys.argv[idx + 1]
+    return ""
 
 
 if __name__ == "__main__":
     if "--create-shortcuts" in sys.argv:
         create_shortcuts()
         sys.exit(0)
+    if "--uninstall" in sys.argv:
+        from modnest.config import Settings
+        from modnest.i18n import set_language
+        from modnest.updater import uninstall
+        set_language(Settings.load().language)
+        sys.exit(uninstall())
     sys.exit(main())

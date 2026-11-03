@@ -478,3 +478,8 @@ EN: dict[str, str] = {
     "Texturepack": "Resource pack",
     "Shader": "Shaders",
 }
+
+
+from .i18n_en_more import MORE  # noqa: E402
+
+EN.update(MORE)

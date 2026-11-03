@@ -1,5 +1,6 @@
 """Installiert Minecraft + Mod-Loader und startet das Spiel."""
 import hashlib
+import shlex
 import subprocess
 import sys
 import uuid
@@ -66,6 +67,14 @@ def install(instance: Instance, progress) -> str:
     return version_id
 
 
+def jvm_arguments(instance: Instance, settings) -> list[str]:
+    ram = instance.ram_mb or settings.ram_mb
+    args = [f"-Xmx{ram}M", "-Xms512M"]
+    if instance.jvm_args.strip():
+        args += shlex.split(instance.jvm_args, posix=False)
+    return args
+
+
 def supports_quick_play(mc_version: str) -> bool:
     """Quick Play (direkt in Welt/Server) gibt es ab Minecraft 1.20 bzw. den neuen Jahresversionen."""
     parts = mc_version.split(".")
@@ -91,10 +100,11 @@ def launch(instance: Instance, settings, account, progress, quick_play: tuple[st
         "launcherName": APP_NAME,
         "launcherVersion": APP_VERSION,
         "gameDirectory": str(instance.path),
-        "jvmArguments": [f"-Xmx{settings.ram_mb}M", "-Xms512M"],
+        "jvmArguments": jvm_arguments(instance, settings),
     }
-    if settings.java_path.strip():
-        options["executablePath"] = settings.java_path.strip()
+    java = (instance.java_path or settings.java_path).strip()
+    if java:
+        options["executablePath"] = java
     if quick_play:
         target_kind, target = quick_play
         if supports_quick_play(instance.mc_version):

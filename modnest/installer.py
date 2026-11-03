@@ -48,7 +48,8 @@ def install_project(instance: Instance, project: Project, settings, category: st
         filename = _safe_filename(rel.filename)
         progress(tr("Lade {file} …").format(file=filename), 0, 100)
         download(rel.download_url, content.folder / filename,
-                 lambda done, total: progress(tr("Lade {file} …").format(file=filename), done * 100 // total, 100))
+                 lambda done, total: progress(tr("Lade {file} …").format(file=filename), done * 100 // total, 100),
+                 sha1=rel.sha1)
         item = Mod(
             file=filename,
             name=proj.title,

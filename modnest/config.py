@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 APP_NAME = "ModNest"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 USER_AGENT = f"ModNest-Launcher/{APP_VERSION}"
 
 
@@ -43,7 +43,34 @@ class Settings:
     backup_worlds: bool = True      # Welten beim Beenden des Spiels sichern
     backup_screenshots: bool = True # Screenshots automatisch sichern
     backup_keep: int = 5            # Anzahl Welt-Backups pro Welt
+    minimize_on_launch: bool = False  # Launcher beim Spielen minimieren
+    discord_rpc: bool = True        # „Spielt …“ in Discord anzeigen
+    discord_client_id: str = ""     # Discord-Anwendungs-ID (leer = aus)
     extra: dict = field(default_factory=dict)
+
+    KEY_FIELDS = ("curseforge_api_key", "ms_client_id", "discord_client_id")
+
+    def __post_init__(self):
+        """Leere Schlüssel mit den eingebauten Werten füllen (siehe keys.py) – gespeichert werden sie nie."""
+        from .keys import DEFAULT_KEYS
+        self._defaults = {}
+        for name in self.KEY_FIELDS:
+            default = DEFAULT_KEYS.get(name, "")
+            if default and not getattr(self, name).strip():
+                setattr(self, name, default)
+                self._defaults[name] = default
+
+    def builtin(self, name: str) -> str:
+        from .keys import DEFAULT_KEYS
+        return DEFAULT_KEYS.get(name, "")
+
+    def is_builtin(self, name: str) -> bool:
+        return bool(self.builtin(name)) and getattr(self, name) == self.builtin(name)
+
+    def set_key(self, name: str, value: str) -> None:
+        """Leer = eingebauten Wert verwenden."""
+        value = value.strip()
+        setattr(self, name, value or self.builtin(name))
 
     @classmethod
     def load(cls) -> "Settings":
@@ -59,4 +86,8 @@ class Settings:
 
     def save(self) -> None:
         path = data_dir() / "settings.json"
-        path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        data = asdict(self)
+        for name in self.KEY_FIELDS:
+            if self.builtin(name) and data[name] == self.builtin(name):
+                data[name] = ""     # eingebaute Schlüssel nicht in settings.json schreiben
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")

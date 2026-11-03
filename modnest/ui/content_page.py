@@ -2,7 +2,7 @@
 import os
 
 from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QColorDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton,
     QVBoxLayout, QWidget,
@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 from ..categorize import guess_category
 from ..instances import FALLBACK_CATEGORY, KINDS, ContentSet, Instance
 from .mod_tree import CATEGORY, MOD, ModTree
+from .tools_dialogs import CompatDialog
 from ..i18n import tr
 
 HINTS = {
@@ -26,6 +27,9 @@ class ContentPage(QWidget):
     message = Signal(str)
     versionRequested = Signal(str, object)      # kind, Mod
     irisRequested = Signal()
+    perfRequested = Signal()
+    searchRequested = Signal(str)               # Suchbegriff für „Entdecken“
+    profileApplied = Signal()
 
     def __init__(self, kind: str, icon_loader, parent=None):
         super().__init__(parent)
@@ -59,6 +63,30 @@ class ContentPage(QWidget):
             bar.addWidget(btn)
         layout.addLayout(bar)
 
+        if kind == "mods":
+            tools = QHBoxLayout()
+            tools.setSpacing(8)
+            for text, tip, slot in [
+                (tr("🩺  Prüfen"), tr("Kompatibilitäts-Check: falscher Loader, doppelte Mods, fehlende Abhängigkeiten, "
+                                     "bekannte Konflikte"), self.check_compat),
+                (tr("⚡  Performance-Paket"), tr("Bewährte Performance-Mods mit einem Klick installieren"),
+                 self.perfRequested.emit),
+            ]:
+                btn = QPushButton(text)
+                btn.setObjectName("ghost")
+                btn.setToolTip(tip)
+                btn.clicked.connect(slot)
+                tools.addWidget(btn)
+            self.profile_btn = QPushButton(tr("🗂  Profile"))
+            self.profile_btn.setObjectName("ghost")
+            self.profile_btn.setToolTip(tr("Mod-Profile: gespeicherte An/Aus-Zustände, z.B. „PvP“ oder „Shader-Modus“"))
+            self.profile_menu = QMenu(self)
+            self.profile_menu.aboutToShow.connect(self._fill_profiles)
+            self.profile_btn.setMenu(self.profile_menu)
+            tools.addWidget(self.profile_btn)
+            tools.addStretch(1)
+            layout.addLayout(tools)
+
         hint_row = QHBoxLayout()
         hint = QLabel(HINTS[kind])
         hint.setObjectName("hint")
@@ -86,6 +114,11 @@ class ContentPage(QWidget):
         self.empty.setObjectName("empty")
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.empty)
+
+        find = QShortcut(QKeySequence.StandardKey.Find, self, context=Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        find.activated.connect(lambda: (self.filter.setFocus(), self.filter.selectAll()))
+        delete = QShortcut(QKeySequence.StandardKey.Delete, self.tree, context=Qt.ShortcutContext.WidgetShortcut)
+        delete.activated.connect(self._delete_selected)
 
     # --- Daten -------------------------------------------------------------
     @property
@@ -202,7 +235,7 @@ class ContentPage(QWidget):
         self.message.emit(tr("{n} Eintrag/Einträge automatisch einsortiert.").format(n=count))
 
     def remove_items(self, files: list[str]) -> None:
-        text = tr("{n} Eintrag/Einträge wirklich entfernen? Die Dateien werden gelöscht.").format(n=len(files))
+        text = tr("{n} Eintrag/Einträge entfernen? Die Dateien landen im Windows-Papierkorb.").format(n=len(files))
         if QMessageBox.question(self, tr("Entfernen"), text) == QMessageBox.StandardButton.Yes:
             for f in files:
                 self.content.remove(f)
@@ -285,6 +318,66 @@ class ContentPage(QWidget):
         menu.addAction(tr("Unkategorisierte automatisch einsortieren"), self.auto_sort)
         menu.addAction(tr("Neu laden"), self.refresh)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _delete_selected(self) -> None:
+        files = [self.tree.key(i) for i in self.tree.selected_of_kind(MOD)]
+        if files and self.content:
+            self.remove_items(files)
+
+    # --- Kompatibilität & Profile -------------------------------------------
+    def check_compat(self) -> None:
+        if not self.instance:
+            return
+        dlg = CompatDialog(self.instance, self)
+        dlg.searchRequested.connect(self.searchRequested)
+        dlg.exec()
+        if dlg.changed:
+            self.refresh()
+
+    def _fill_profiles(self) -> None:
+        menu = self.profile_menu
+        menu.clear()
+        if not self.instance:
+            return
+        profiles = sorted(self.instance.profiles)
+        if profiles:
+            for name in profiles:
+                menu.addAction(tr("▶  {name}").format(name=name), lambda n=name: self.apply_profile(n))
+            menu.addSeparator()
+        menu.addAction(tr("💾  Aktuellen Zustand als Profil speichern …"), self.save_profile)
+        if profiles:
+            delete = menu.addMenu(tr("🗑  Profil löschen"))
+            for name in profiles:
+                delete.addAction(name, lambda n=name: self.delete_profile(n))
+        else:
+            hint = menu.addAction(tr("Noch keine Profile – schalte Mods an/aus und speichere den Zustand."))
+            hint.setEnabled(False)
+
+    def save_profile(self) -> None:
+        name, ok = QInputDialog.getText(self, tr("Profil speichern"),
+                                        tr("Name des Profils (z.B. PvP, Shader-Modus, Laptop):"))
+        if ok and name.strip():
+            name = name.strip()
+            if name in self.instance.profiles and QMessageBox.question(
+                    self, tr("Profil speichern"), tr("Profil „{name}“ überschreiben?").format(name=name)) \
+                    != QMessageBox.StandardButton.Yes:
+                return
+            self.instance.save_profile(name)
+            self.message.emit(tr("✔ Profil „{name}“ gespeichert.").format(name=name))
+
+    def apply_profile(self, name: str) -> None:
+        try:
+            changed = self.instance.apply_profile(name)
+        except OSError as exc:
+            QMessageBox.warning(self, tr("Profil"), str(exc))
+            return
+        self.message.emit(tr("✔ Profil „{name}“ aktiv ({n} Änderung(en)).").format(name=name, n=changed))
+        self.profileApplied.emit()
+
+    def delete_profile(self, name: str) -> None:
+        if QMessageBox.question(self, tr("Profil löschen"), tr("Profil „{name}“ löschen?").format(name=name)) \
+                == QMessageBox.StandardButton.Yes:
+            self.instance.delete_profile(name)
 
     def _move_to_new_category(self, files: list[str]) -> None:
         before = set(self.content.category_names())

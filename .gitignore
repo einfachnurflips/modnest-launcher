@@ -10,3 +10,12 @@ ModNest.lnk
 # Sicherheitshalber: lokale Einstellungen/Konten nie hochladen
 settings.json
 accounts.json
+
+# Eingebaute Schlüssel (CurseForge-Key, Client-IDs) – NIE hochladen
+default_keys.json
+modnest/default_keys.json
+
+# Build-Ausgaben
+build/
+dist/
+*.spec.bak

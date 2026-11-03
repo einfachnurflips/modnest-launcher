@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from .config import instances_dir
+from .trash import move_to_trash
 
 FALLBACK_CATEGORY = "Unkategorisiert"
 DISABLED = ".disabled"
@@ -222,7 +223,7 @@ class ContentSet:
     def remove(self, file: str) -> None:
         for m in list(self.items):
             if m.file == file:
-                _delete(self.folder / m.disk_name)
+                move_to_trash(self.folder / m.disk_name)
                 self.items.remove(m)
 
     def set_enabled(self, file: str, enabled: bool) -> None:
@@ -255,6 +256,12 @@ class Instance:
         self.icon = ""             # Dateiname eines eigenen Icons im Instanz-Ordner
         self.playtime = 0          # gespielte Sekunden
         self.last_played = 0.0     # Unix-Zeit des letzten Starts
+        self.ram_mb = 0            # 0 = globale Einstellung
+        self.java_path = ""        # leer = globale Einstellung
+        self.jvm_args = ""         # zusätzliche Java-Argumente
+        self.pack: dict = {}       # Herkunft, falls aus einem fertigen Modpack installiert
+        self.profiles: dict = {}   # Mod-Profile: Name → {Art: [aktivierte Dateien]}
+        self.group = ""            # Ordner in der Seitenleiste
         self.content = {kind: ContentSet(kind, path) for kind in KINDS}
 
     # Kurzformen für die Mods (häufigster Fall)
@@ -284,6 +291,12 @@ class Instance:
         inst.icon = raw.get("icon", "")
         inst.playtime = int(raw.get("playtime", 0))
         inst.last_played = float(raw.get("last_played", 0))
+        inst.ram_mb = int(raw.get("ram_mb", 0) or 0)
+        inst.java_path = raw.get("java_path", "")
+        inst.jvm_args = raw.get("jvm_args", "")
+        inst.pack = raw.get("pack") or {}
+        inst.profiles = raw.get("profiles") or {}
+        inst.group = raw.get("group", "")
         # Mods stehen aus Kompatibilitätsgründen direkt auf oberster Ebene
         inst.content["mods"].load_raw(raw.get("categories"), raw.get("mods"))
         for kind in ("resourcepacks", "shaderpacks"):
@@ -307,6 +320,12 @@ class Instance:
             "icon": self.icon,
             "playtime": self.playtime,
             "last_played": self.last_played,
+            "ram_mb": self.ram_mb,
+            "java_path": self.java_path,
+            "jvm_args": self.jvm_args,
+            "pack": self.pack,
+            "profiles": self.profiles,
+            "group": self.group,
             "categories": mods["categories"],
             "mods": mods["items"],
             "resourcepacks": self.content["resourcepacks"].to_raw(),
@@ -315,6 +334,38 @@ class Instance:
         tmp = self.json_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         tmp.replace(self.json_path)
+
+    # --- Mod-Profile ------------------------------------------------------------
+    def save_profile(self, name: str) -> None:
+        """Merkt sich, welche Mods, Texturepacks und Shader gerade aktiviert sind."""
+        self.profiles[name] = {kind: {"on": [m.file for m in cs.items if m.enabled],
+                                      "off": [m.file for m in cs.items if not m.enabled]}
+                               for kind, cs in self.content.items()}
+        self.save()
+
+    def apply_profile(self, name: str) -> int:
+        """Schaltet alles so, wie im Profil gespeichert. Gibt die Zahl der Änderungen zurück."""
+        profile = self.profiles.get(name)
+        if profile is None:
+            return 0
+        changed = 0
+        for kind, cs in self.content.items():
+            if kind not in profile:
+                continue
+            on, off = set(profile[kind].get("on", [])), set(profile[kind].get("off", []))
+            for m in cs.items:
+                if m.file not in on and m.file not in off:
+                    continue   # nach dem Speichern neu installiert – Zustand beibehalten
+                enabled = m.file in on
+                if m.enabled != enabled:
+                    cs.set_enabled(m.file, enabled)
+                    changed += 1
+        self.save()
+        return changed
+
+    def delete_profile(self, name: str) -> None:
+        self.profiles.pop(name, None)
+        self.save()
 
     def write_resourcepack_order(self) -> None:
         """Überträgt aktivierte Texturepacks in ihrer Reihenfolge in options.txt.
@@ -368,7 +419,35 @@ def _free_path(name: str) -> Path:
     return path
 
 
-def create_instance(name: str, mc_version: str, loader: str) -> Instance:
+DEFAULT_FILES = ("options.txt", "optionsof.txt", "optionsshaders.txt", "servers.dat")
+
+
+def defaults_dir() -> Path:
+    from .config import data_dir
+    return data_dir() / "defaults"
+
+
+def has_defaults() -> bool:
+    return (defaults_dir() / "options.txt").exists()
+
+
+def save_defaults(inst: "Instance") -> list[str]:
+    """Merkt sich Tastenbelegung, Grafik- und Spracheinstellungen dieser Instanz für neue Instanzen."""
+    target = defaults_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for name in DEFAULT_FILES:
+        if (inst.path / name).is_file():
+            shutil.copy2(inst.path / name, target / name)
+            saved.append(name)
+    return saved
+
+
+def clear_defaults() -> None:
+    shutil.rmtree(defaults_dir(), ignore_errors=True)
+
+
+def create_instance(name: str, mc_version: str, loader: str, use_defaults: bool = True) -> Instance:
     path = _free_path(name)
     path.mkdir(parents=True)
     inst = Instance(path)
@@ -377,12 +456,18 @@ def create_instance(name: str, mc_version: str, loader: str) -> Instance:
     inst.loader = loader
     for cs in inst.content.values():
         cs.folder  # legt die Ordner an
+    if use_defaults and defaults_dir().is_dir():
+        for file in DEFAULT_FILES:
+            src = defaults_dir() / file
+            if src.is_file():
+                shutil.copy2(src, path / file)
     inst.save()
     return inst
 
 
 def delete_instance(inst: Instance) -> None:
-    shutil.rmtree(inst.path, ignore_errors=True)
+    """Verschiebt die Instanz in den Papierkorb (wiederherstellbar)."""
+    move_to_trash(inst.path)
 
 
 # Ordner, die beim Kopieren nie mitgenommen werden (Laufzeitdaten)

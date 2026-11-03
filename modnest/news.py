@@ -65,7 +65,12 @@ def launcher_update() -> dict | None:
         data = resp.json()
         tag = data.get("tag_name", "")
         if tag and _version_tuple(tag) > _version_tuple(APP_VERSION):
-            return {"version": tag.lstrip("vV"), "url": data.get("html_url", ""), "notes": data.get("body", "")}
+            setup = next((a for a in data.get("assets", []) if a.get("name", "").lower().endswith("setup.exe")
+                          or ("setup" in a.get("name", "").lower() and a.get("name", "").lower().endswith(".exe"))), {})
+            digest = setup.get("digest") or ""
+            return {"version": tag.lstrip("vV"), "url": data.get("html_url", ""), "notes": data.get("body", ""),
+                    "setup_url": setup.get("browser_download_url", ""),
+                    "sha256": digest.split(":", 1)[1] if digest.startswith("sha256:") else ""}
         return None
     resp = session.get(f"https://api.github.com/repos/{GITHUB_REPO}/tags", timeout=10)
     if resp.status_code == 200:

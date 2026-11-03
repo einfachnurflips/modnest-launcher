@@ -28,3 +28,11 @@ def duration(seconds: int) -> str:
         return tr("{m} Min.").format(m=minutes)
     hours, minutes = divmod(minutes, 60)
     return tr("{h} Std. {m} Min.").format(h=hours, m=minutes) if minutes else tr("{h} Std.").format(h=hours)
+
+
+def downloads_text(n: int) -> str:
+    if n >= 1_000_000:
+        return tr("{n} Mio.").format(n=f"{n / 1_000_000:.1f}")
+    if n >= 1_000:
+        return tr("{n} Tsd.").format(n=f"{n / 1_000:.0f}")
+    return str(n)

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 
 from ..instances import KINDS, Instance
 from ..sources import SOURCES, get_source
+from .fmt import downloads_text
 from .workers import run_task
 from ..i18n import tr
 
@@ -18,14 +19,6 @@ PLACEHOLDERS = {
     "resourcepacks": tr("Texturepacks suchen, z.B. Faithful, Fresh Animations …"),
     "shaderpacks": tr("Shader suchen, z.B. Complementary, BSL, Bliss …"),
 }
-
-
-def _fmt_downloads(n: int) -> str:
-    if n >= 1_000_000:
-        return tr("{n} Mio.").format(n=f"{n / 1_000_000:.1f}")
-    if n >= 1_000:
-        return tr("{n} Tsd.").format(n=f"{n / 1_000:.0f}")
-    return str(n)
 
 
 class SearchPage(QWidget):
@@ -198,7 +191,7 @@ class SearchPage(QWidget):
         installed = self._installed_keys()
         for proj in projects:
             self.projects.append(proj)
-            item = QTreeWidgetItem(["", proj.author, _fmt_downloads(proj.downloads)])
+            item = QTreeWidgetItem(["", proj.author, downloads_text(proj.downloads)])
             item.setData(0, Qt.ItemDataRole.UserRole, len(self.projects) - 1)
             item.setToolTip(0, f"<b>{proj.title}</b><br>{proj.description}<br><i>{', '.join(proj.categories)}</i>")
             item.setSizeHint(0, QSize(0, 58))
