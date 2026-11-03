@@ -1,0 +1,12 @@
+# Python-Umgebung und Cache
+.venv/
+__pycache__/
+*.pyc
+
+# Werden beim ersten Start lokal erzeugt
+ModNest.ico
+ModNest.lnk
+
+# Sicherheitshalber: lokale Einstellungen/Konten nie hochladen
+settings.json
+accounts.json
