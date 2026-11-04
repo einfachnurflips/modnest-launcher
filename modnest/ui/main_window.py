@@ -648,6 +648,22 @@ class MainWindow(QMainWindow):
                  lambda err: (self._done(tr("⚠ Import fehlgeschlagen.")), QMessageBox.warning(self, tr("Import"), err)),
                  self.on_progress)
 
+    def handle_command(self, command: str) -> None:
+        """Befehle von einem zweiten Start (z.B. Desktop-Verknüpfung einer Instanz)."""
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if command.startswith("play:"):
+            key = command[5:]
+            inst = next((i for i in self.instances if i.path.name == key or i.name == key), None)
+            if inst is None:
+                self.reload_instances(show_home=True)
+                inst = next((i for i in self.instances if i.path.name == key or i.name == key), None)
+            if inst is not None:
+                self.play(inst)
+
     def update_launcher(self, info: dict) -> None:
         if self.game_process is not None:
             QMessageBox.information(self, "ModNest", tr("Bitte zuerst Minecraft beenden."))
@@ -1180,6 +1196,7 @@ class MainWindow(QMainWindow):
                 self.showMinimized()
 
         def fail(err):
+            store.save()          # ggf. neuer Refresh-Token, auch wenn der Start fehlschlug
             self._reset_play()
             self._done(tr("⚠ Start fehlgeschlagen."))
             QMessageBox.critical(self, tr("Start fehlgeschlagen"), err)

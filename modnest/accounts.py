@@ -73,7 +73,7 @@ class Account:
     name: str
     uuid: str
     refresh_token: str = ""   # verschlüsselt gespeichert
-    mc_token: str = ""        # nur im Speicher
+    mc_token: str = ""        # Minecraft-Ticket, ebenfalls verschlüsselt gespeichert (gilt ca. 24 Std.)
     mc_token_expires: float = 0
 
     @property
@@ -104,8 +104,12 @@ class AccountStore:
             acc = Account(**{k: v for k, v in a.items() if k in names})
             try:
                 acc.refresh_token = _unprotect(acc.refresh_token)
-            except OSError:
+            except (OSError, ValueError):
                 acc.refresh_token = ""   # z.B. anderer Windows-Benutzer → neu anmelden
+            try:
+                acc.mc_token = _unprotect(acc.mc_token) if acc.mc_token else ""
+            except (OSError, ValueError):
+                acc.mc_token, acc.mc_token_expires = "", 0
             self.accounts.append(acc)
         self.active_id = raw.get("active", "")
 
@@ -114,10 +118,14 @@ class AccountStore:
         for acc in self.accounts:
             d = asdict(acc)
             d["refresh_token"] = _protect(acc.refresh_token)
-            d.pop("mc_token")
-            d.pop("mc_token_expires")
+            if acc.mc_token and acc.mc_token_expires > time.time():
+                d["mc_token"] = _protect(acc.mc_token)
+            else:
+                d["mc_token"], d["mc_token_expires"] = "", 0
             data.append(d)
-        self.path.write_text(json.dumps({"active": self.active_id, "accounts": data}, indent=2), encoding="utf-8")
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"active": self.active_id, "accounts": data}, indent=2), encoding="utf-8")
+        tmp.replace(self.path)
 
     @property
     def active(self) -> Account | None:
@@ -198,13 +206,20 @@ def refresh(acc: Account, client_id: str) -> Account:
     if resp.status_code != 200:
         raise LoginError(tr("Die Anmeldung von {name} ist abgelaufen. Bitte das Konto neu hinzufügen.").format(
             name=acc.name) + f"\n({_ms_error(data)})")
-    fresh = _minecraft_login(data["access_token"], data.get("refresh_token", acc.refresh_token))
+    # Neuen Refresh-Token sofort übernehmen, auch wenn der nächste Schritt fehlschlägt
+    acc.refresh_token = data.get("refresh_token", acc.refresh_token)
+    try:
+        fresh = _minecraft_login(data["access_token"], acc.refresh_token, renewing=True)
+    except LoginError:
+        if acc.mc_token and acc.mc_token_expires > time.time() + 60:
+            return acc        # altes Ticket gilt noch – damit weiterspielen
+        raise
     acc.name, acc.refresh_token = fresh.name, fresh.refresh_token
     acc.mc_token, acc.mc_token_expires = fresh.mc_token, fresh.mc_token_expires
     return acc
 
 
-def _minecraft_login(ms_token: str, refresh_token: str) -> Account:
+def _minecraft_login(ms_token: str, refresh_token: str, renewing: bool = False) -> Account:
     headers = {"Accept": "application/json"}
     # Xbox Live
     resp = session.post("https://user.auth.xboxlive.com/user/authenticate", json={
@@ -230,6 +245,11 @@ def _minecraft_login(ms_token: str, refresh_token: str) -> Account:
     resp = session.post("https://api.minecraftservices.com/authentication/login_with_xbox", json={
         "identityToken": f"XBL3.0 x={userhash};{xsts['Token']}",
     }, headers=headers, timeout=20)
+    if resp.status_code == 403 and renewing:
+        raise LoginError(tr(
+            "Minecraft hat die erneute Anmeldung abgelehnt (403).\n\n"
+            "Das passiert manchmal kurz nach der Freischaltung durch Microsoft. Warte ein paar Minuten und versuch es "
+            "erneut. Hilft das nicht, entferne das Konto über den Konto-Button und füge es neu hinzu."))
     if resp.status_code == 403:
         raise LoginError(
             tr("Minecraft hat die Anmeldung abgelehnt (403).\n\n"

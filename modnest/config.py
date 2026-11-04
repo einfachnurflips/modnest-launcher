@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 APP_NAME = "ModNest"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 USER_AGENT = f"ModNest-Launcher/{APP_VERSION}"
 
 

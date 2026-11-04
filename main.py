@@ -40,6 +40,10 @@ def main() -> int:
     from PySide6.QtWidgets import QApplication
 
     app = QApplication(sys.argv)
+    # Läuft ModNest schon? Dann den Befehl dorthin schicken, statt ein zweites Fenster zu öffnen
+    command = "play:" + _arg("--play") if _arg("--play") else "show"
+    if _send_to_running(command):
+        return 0
     from modnest.config import APP_NAME, Settings, data_dir
     from modnest.i18n import set_language, tr
     from modnest.ui.icons import app_icon
@@ -92,12 +96,51 @@ def main() -> int:
         window.new_instance()
     elif next_step == "import":
         window.import_launchers()
-    play = _arg("--play")
-    if play:
-        inst = next((i for i in window.instances if i.path.name == play or i.name == play), None)
-        if inst is not None:
-            window.play(inst)
+    server = _listen(window)  # noqa: F841 – muss am Leben bleiben
+    if command.startswith("play:"):
+        window.handle_command(command)
     return app.exec()
+
+
+def _server_name() -> str:
+    import getpass
+    return f"ModNest-{getpass.getuser()}"
+
+
+def _send_to_running(command: str) -> bool:
+    from PySide6.QtNetwork import QLocalSocket
+    sock = QLocalSocket()
+    sock.connectToServer(_server_name())
+    if not sock.waitForConnected(500):
+        return False
+    sock.write(command.encode("utf-8"))
+    sock.flush()
+    sock.waitForBytesWritten(1000)
+    sock.disconnectFromServer()
+    return True
+
+
+def _listen(window):
+    from PySide6.QtNetwork import QLocalServer
+    server = QLocalServer(window)
+    QLocalServer.removeServer(_server_name())
+    server.listen(_server_name())
+
+    def on_connection():
+        sock = server.nextPendingConnection()
+        if sock is None:
+            return
+
+        def read():
+            data = bytes(sock.readAll()).decode("utf-8", errors="replace").strip()
+            if data:
+                window.handle_command(data)
+            sock.disconnectFromServer()
+
+        sock.readyRead.connect(read)
+
+    server.newConnection.connect(on_connection)
+    return server
 
 
 def _arg(name: str) -> str:

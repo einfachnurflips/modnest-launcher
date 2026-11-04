@@ -310,4 +310,6 @@ MORE = {
     "＋  Eine eigene Instanz erstellen": "＋  Create my own instance",
     "🔄  Instanzen aus einem anderen Launcher übernehmen": "🔄  Import instances from another launcher",
     "Schritt {n} von {total}": "Step {n} of {total}",
+    "Minecraft hat die erneute Anmeldung abgelehnt (403).\n\nDas passiert manchmal kurz nach der Freischaltung durch Microsoft. Warte ein paar Minuten und versuch es erneut. Hilft das nicht, entferne das Konto über den Konto-Button und füge es neu hinzu.":
+        "Minecraft rejected the renewed sign-in (403).\n\nThis sometimes happens shortly after Microsoft approves an app. Wait a few minutes and try again. If that doesn't help, remove the account via the account button and add it again.",
 }
