@@ -9,10 +9,13 @@ from PySide6.QtWidgets import (
 from ..instances import KINDS, Instance
 from ..sources import SOURCES, get_source
 from .fmt import downloads_text
+from .project_page import ProjectDialog, category_label
 from .workers import run_task
 from ..i18n import tr
 
 AUTO = "__auto__"
+SORT_LABELS = {"relevance": tr("Relevanz / beliebt"), "downloads": tr("Meiste Downloads"),
+               "updated": tr("Zuletzt aktualisiert"), "newest": tr("Neueste")}
 PAGE_SIZE = 30
 PLACEHOLDERS = {
     "mods": tr("Mods suchen, z.B. Sodium, JEI, Create …"),
@@ -56,7 +59,7 @@ class SearchPage(QWidget):
         self.source = QComboBox()
         for key, label in SOURCES.items():
             self.source.addItem(label, key)
-        self.source.currentIndexChanged.connect(lambda _: self.search())
+        self.source.currentIndexChanged.connect(lambda _: (self._load_categories(), self.search()))
         pills.addWidget(self.source)
         layout.addLayout(pills)
 
@@ -66,6 +69,16 @@ class SearchPage(QWidget):
         self.query.setClearButtonEnabled(True)
         self.query.returnPressed.connect(self.search)
         bar.addWidget(self.query, 1)
+        self.category_filter = QComboBox()
+        self.category_filter.setMinimumWidth(170)
+        self.category_filter.addItem(tr("Alle Kategorien"), "")
+        self.category_filter.currentIndexChanged.connect(lambda _: self.search())
+        bar.addWidget(self.category_filter)
+        self.sort = QComboBox()
+        for key, label in SORT_LABELS.items():
+            self.sort.addItem(label, key)
+        self.sort.currentIndexChanged.connect(lambda _: self.search())
+        bar.addWidget(self.sort)
         go = QPushButton(tr("Suchen"))
         go.setObjectName("primary")
         go.clicked.connect(self.search)
@@ -85,7 +98,7 @@ class SearchPage(QWidget):
         self.results.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.results.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.results.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.results.itemDoubleClicked.connect(lambda *_: self.install_selected())
+        self.results.itemDoubleClicked.connect(lambda *_: self.open_details())
         self.results.itemSelectionChanged.connect(self._selection_changed)
         self.results.verticalScrollBar().valueChanged.connect(self._maybe_load_more)
         layout.addWidget(self.results, 1)
@@ -96,8 +109,9 @@ class SearchPage(QWidget):
         self.category.setMinimumWidth(180)
         bottom.addWidget(self.category)
         bottom.addStretch(1)
-        page = QPushButton(tr("Projektseite"))
-        page.clicked.connect(self.open_page)
+        page = QPushButton(tr("ℹ  Details"))
+        page.setToolTip(tr("Beschreibung, Bilder und Links ansehen (auch per Doppelklick)"))
+        page.clicked.connect(self.open_details)
         bottom.addWidget(page)
         self.version_btn = QPushButton(tr("⚙  Version wählen …"))
         self.version_btn.setToolTip(tr("Optional: eine bestimmte (z.B. ältere) Version installieren"))
@@ -129,6 +143,7 @@ class SearchPage(QWidget):
             btn.setChecked(tr(KINDS[kind]["label"]) in btn.text())
         self.query.setPlaceholderText(PLACEHOLDERS[kind])
         self.refresh_categories()
+        self._load_categories()
         self.search()
 
     def refresh_categories(self) -> None:
@@ -173,9 +188,11 @@ class SearchPage(QWidget):
         self.info.setText(tr("Suche {what} auf {source} für Minecraft {mc} …").format(
             what=tr(KINDS[kind]["label"]), source=SOURCES[src_key], mc=inst.mc_version))
 
+        sort, category = self.sort.currentData() or "", self.category_filter.currentData() or ""
+
         def work():
             return get_source(src_key, self.settings).search(query, inst.mc_version, inst.loader, offset,
-                                                             PAGE_SIZE, kind)
+                                                             PAGE_SIZE, kind, sort=sort, category=category)
 
         run_task(work, lambda res: self._show(search_id, res), lambda err: self._error(search_id, err))
 
@@ -202,7 +219,7 @@ class SearchPage(QWidget):
         mc = self.instance.mc_version
         loader = f" / {self.instance.loader}" if self.kind == "mods" else ""
         self.info.setText(tr("{n} Ergebnisse auf {source} – passend zu Minecraft {mc}{loader}. "
-                             "Doppelklick installiert die neueste Version.").format(
+                             "Doppelklick zeigt Details.").format(
             n=len(self.projects), source=self.source.currentText(), mc=mc, loader=loader))
 
     @staticmethod
@@ -232,6 +249,41 @@ class SearchPage(QWidget):
         projects = self._selected_projects()
         if len(projects) == 1:
             self.versionPickRequested.emit(projects[0], self._category())
+
+    def _load_categories(self) -> None:
+        src_key, kind = self.source.currentData(), self.kind
+        self._cat_req = getattr(self, "_cat_req", 0) + 1
+        req = self._cat_req
+
+        def fill(cats):
+            if req != self._cat_req:
+                return
+            try:
+                self.category_filter.blockSignals(True)
+                self.category_filter.clear()
+                self.category_filter.addItem(tr("Alle Kategorien"), "")
+                for c in cats:
+                    cid, name = c if isinstance(c, tuple) else (c, category_label(c))
+                    self.category_filter.addItem(name, cid)
+                self.category_filter.blockSignals(False)
+            except RuntimeError:
+                pass
+
+        run_task(lambda: get_source(src_key, self.settings).categories(kind), fill, lambda err: fill([]))
+
+    def open_details(self) -> None:
+        projects = self._selected_projects()
+        if not projects:
+            return
+        proj = projects[0]
+        source = get_source(proj.source, self.settings)
+        installed = (proj.source, proj.project_id) in self._installed_keys()
+        dlg = ProjectDialog(proj.title, proj.author, proj.description, proj.icon_url, proj.url,
+                            lambda: source.details(proj.project_id), self.icon_loader, self, installed)
+        category = self._category()
+        dlg.installLatest.connect(lambda: self.installRequested.emit(proj, category, None))
+        dlg.chooseVersion.connect(lambda: self.versionPickRequested.emit(proj, category))
+        dlg.exec()
 
     def open_page(self) -> None:
         for proj in self._selected_projects()[:3]:

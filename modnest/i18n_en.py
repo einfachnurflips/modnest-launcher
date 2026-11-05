@@ -483,3 +483,7 @@ EN: dict[str, str] = {
 from .i18n_en_more import MORE  # noqa: E402
 
 EN.update(MORE)
+
+from .i18n_en_v4 import V4  # noqa: E402
+
+EN.update(V4)

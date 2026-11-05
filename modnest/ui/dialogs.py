@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import backup, game
+from .. import backup, game, java
 from ..i18n import LANGUAGES, tr
 from ..instances import KINDS, LOADERS, clear_defaults, has_defaults
 from ..system import ram_rating, total_ram_mb
@@ -218,6 +218,14 @@ class SettingsDialog(QDialog):
         self.discord = QCheckBox(tr("In Discord anzeigen, was ich spiele"))
         self.discord.setChecked(settings.discord_rpc)
         form.addRow(self.discord)
+        self.tray = QCheckBox(tr("Symbol im Infobereich der Taskleiste (unten rechts)"))
+        self.tray.setChecked(settings.tray_icon)
+        form.addRow(self.tray)
+        self.close_tray = QCheckBox(tr("Beim Schließen dort weiterlaufen statt beenden"))
+        self.close_tray.setChecked(settings.close_to_tray)
+        self.close_tray.setEnabled(settings.tray_icon)
+        self.tray.toggled.connect(self.close_tray.setEnabled)
+        form.addRow(self.close_tray)
         tools = QHBoxLayout()
         tools.setContentsMargins(0, 0, 0, 0)
         storage_btn = QPushButton(tr("💽  Speicherplatz & Aufräumen …").replace("&", "&&"))
@@ -244,10 +252,13 @@ class SettingsDialog(QDialog):
         browse = QPushButton("…")
         browse.setFixedWidth(36)
         browse.clicked.connect(self._browse_java)
+        javas = QPushButton(tr("☕ Verwalten …"))
+        javas.clicked.connect(lambda: _pick_java(self, self.java))
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(self.java, 1)
         row.addWidget(browse)
+        row.addWidget(javas)
         wrap = QWidget()
         wrap.setLayout(row)
         form.addRow(tr("Java"), wrap)
@@ -331,6 +342,9 @@ class SettingsDialog(QDialog):
         self.bak_screens = QCheckBox(tr("Neue Screenshots automatisch sichern"))
         self.bak_screens.setChecked(settings.backup_screenshots)
         form.addRow(self.bak_screens)
+        self.bak_updates = QCheckBox(tr("Vor Mod- und Modpack-Updates die Instanz sichern (ohne Welten)"))
+        self.bak_updates.setChecked(settings.backup_before_updates)
+        form.addRow(self.bak_updates)
         self.tabs.addTab(bak_tab, tr("💾  Backups"))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -367,21 +381,138 @@ class SettingsDialog(QDialog):
         s.backup_worlds = self.bak_worlds.isChecked()
         s.backup_keep = self.bak_keep.value()
         s.backup_screenshots = self.bak_screens.isChecked()
+        s.backup_before_updates = self.bak_updates.isChecked()
         s.ram_mb = self.ram.value()
         s.java_path = self.java.text().strip()
         s.set_key("curseforge_api_key", self.cf_key.text())
         s.set_key("ms_client_id", self.ms_client.text())
         s.set_key("discord_client_id", self.discord_id.text())
         s.minimize_on_launch = self.minimize.isChecked()
+        s.tray_icon = self.tray.isChecked()
+        s.close_to_tray = self.close_tray.isChecked() and s.tray_icon
         s.discord_rpc = self.discord.isChecked()
         s.save()
         self.accept()
 
 
+def _pick_java(parent, line_edit, mc_version: str = "") -> None:
+    dlg = JavaDialog(mc_version, parent)
+    if dlg.exec():
+        line_edit.setText(dlg.selected)
+
+
+class JavaDialog(QDialog):
+    """Gefundene Java-Versionen anzeigen, eine auswählen oder Eclipse Temurin herunterladen."""
+
+    def __init__(self, mc_version: str = "", parent=None):
+        super().__init__(parent)
+        self.selected = ""
+        self.setWindowTitle(tr("☕ Java-Versionen"))
+        self.resize(760, 440)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 18)
+        text = tr("Normalerweise lädt Minecraft sein passendes Java selbst – das ist die beste Wahl.")
+        if mc_version:
+            text += " " + tr("Minecraft {mc} braucht Java {v}.").format(mc=mc_version, v=java.recommended_major(mc_version))
+        hint = QLabel(text)
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        from PySide6.QtWidgets import QHeaderView, QTreeWidget, QTreeWidgetItem
+        self._item_cls = QTreeWidgetItem
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels([tr("Version"), tr("Quelle"), tr("Pfad")])
+        self.tree.setRootIsDecorated(False)
+        self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.tree.itemDoubleClicked.connect(lambda *_: self._choose())
+        lay.addWidget(self.tree, 1)
+        dl = QHBoxLayout()
+        dl.addWidget(QLabel(tr("Eclipse Temurin herunterladen:")))
+        self.feature = QComboBox()
+        dl.addWidget(self.feature)
+        self.dl_btn = QPushButton(tr("⬇ Herunterladen"))
+        self.dl_btn.clicked.connect(self._download)
+        dl.addWidget(self.dl_btn)
+        dl.addStretch(1)
+        lay.addLayout(dl)
+        self.status = QLabel(tr("Suche Java …"))
+        self.status.setObjectName("hint")
+        lay.addWidget(self.status)
+        buttons = QHBoxLayout()
+        auto = QPushButton(tr("Automatisch (empfohlen)"))
+        auto.clicked.connect(lambda: (setattr(self, "selected", ""), self.accept()))
+        buttons.addWidget(auto)
+        buttons.addStretch(1)
+        cancel = QPushButton(tr("Abbrechen"))
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        choose = QPushButton(tr("Auswählen"))
+        choose.setObjectName("primary")
+        choose.clicked.connect(self._choose)
+        buttons.addWidget(choose)
+        lay.addLayout(buttons)
+        self.recommended = java.recommended_major(mc_version) if mc_version else 0
+        self._load()
+        run_task(java.available_features, self._features, lambda err: self._features([8, 17, 21, 25]))
+
+    def _safe(self, fn) -> None:
+        try:
+            fn()
+        except RuntimeError:
+            pass
+
+    def _load(self) -> None:
+        run_task(java.find_all, lambda res: self._safe(lambda: self._fill(res)),
+                 lambda err: self._safe(lambda: self.status.setText(f"⚠ {err}")))
+
+    def _fill(self, javas) -> None:
+        self.javas = javas
+        self.tree.clear()
+        for j in javas:
+            mark = "  ★" if self.recommended and j.major == self.recommended else ""
+            self.tree.addTopLevelItem(self._item_cls([j.version + mark, j.source, str(j.path)]))
+        for col in (0, 1):
+            self.tree.resizeColumnToContents(col)
+        self.status.setText(tr("{n} Java-Version(en) gefunden.").format(n=len(javas)))
+
+    def _features(self, features) -> None:
+        def fill():
+            self.feature.clear()
+            for f in features:
+                self.feature.addItem(f"Java {f}", f)
+            if self.recommended:
+                self.feature.setCurrentIndex(max(self.feature.findData(self.recommended), 0))
+        self._safe(fill)
+
+    def _choose(self) -> None:
+        item = self.tree.currentItem()
+        if item is not None:
+            self.selected = item.text(2)
+            self.accept()
+
+    def _download(self) -> None:
+        feature = self.feature.currentData()
+        if not feature:
+            return
+        self.dl_btn.setEnabled(False)
+
+        def progress(text, value, maximum):
+            self._safe(lambda: self.status.setText(f"{text} {value}%" if maximum else (text or "")))
+
+        def done(j):
+            self._safe(lambda: (self.dl_btn.setEnabled(True), self.status.setText(
+                tr("✔ Java {v} installiert.").format(v=j.version))))
+            self._load()
+
+        run_task(lambda p: java.install_temurin(feature, p), done,
+                 lambda err: self._safe(lambda: (self.dl_btn.setEnabled(True), self.status.setText(f"⚠ {err}"))),
+                 lambda t, v, m: progress(t, v, m))
+
+
 class InstanceSettingsDialog(QDialog):
     """Einstellungen nur für eine Instanz: Arbeitsspeicher, Java, Java-Argumente."""
 
-    def __init__(self, instance, settings, parent=None):
+    def __init__(self, instance, settings, parent=None, accounts=None):
         super().__init__(parent)
         self.instance = instance
         self.setWindowTitle(tr("Einstellungen – {name}").format(name=instance.name))
@@ -405,13 +536,26 @@ class InstanceSettingsDialog(QDialog):
         browse = QPushButton("…")
         browse.setFixedWidth(36)
         browse.clicked.connect(self._browse_java)
+        javas = QPushButton(tr("☕ Verwalten …"))
+        javas.clicked.connect(lambda: _pick_java(self, self.java, instance.mc_version))
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(self.java, 1)
         row.addWidget(browse)
+        row.addWidget(javas)
         wrap = QWidget()
         wrap.setLayout(row)
         form.addRow(tr("Java"), wrap)
+
+        self.account = QComboBox()
+        self.account.addItem(tr("Aktives Konto (Standard)"), "")
+        for acc in accounts or []:
+            self.account.addItem(acc.label, acc.id)
+        self.account.setCurrentIndex(max(self.account.findData(instance.account_id), 0))
+        form.addRow(tr("Konto"), self.account)
+        acc_hint = QLabel(tr("Z.B. Survival immer mit dem Hauptkonto, Tests mit einem Zweitkonto."))
+        acc_hint.setObjectName("hint")
+        form.addRow(acc_hint)
 
         self.args = QLineEdit(instance.jvm_args)
         self.args.setPlaceholderText(tr("z.B. -XX:+UseG1GC (nur für Profis)"))
@@ -433,5 +577,6 @@ class InstanceSettingsDialog(QDialog):
         inst.ram_mb = self.ram.value() if self.own_ram.isChecked() else 0
         inst.java_path = self.java.text().strip()
         inst.jvm_args = self.args.text().strip()
+        inst.account_id = self.account.currentData() or ""
         inst.save()
         self.accept()

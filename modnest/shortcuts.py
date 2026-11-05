@@ -34,11 +34,18 @@ def _ps_quote(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
 
-def create_instance_shortcut(instance, icon_ico: Path | None) -> Path:
-    """Legt auf dem Desktop eine Verknüpfung an, die diese Instanz sofort startet."""
+def create_instance_shortcut(instance, icon_ico: Path | None, server: str = "", world: str = "",
+                             label: str = "") -> Path:
+    """Legt auf dem Desktop eine Verknüpfung an, die diese Instanz sofort startet –
+    optional direkt auf einen Server (server="host:port") oder in eine Welt (world=Ordnername)."""
     program, base_args = launch_command()
-    args = f'{base_args} --play "{instance.path.name}"'.strip()
-    safe = re.sub(r'[<>:"/\\|?*]', "_", instance.name)
+    args = f'{base_args} --play "{instance.path.name}"'
+    if server:
+        args += f' --server "{server}"'
+    elif world:
+        args += f' --world "{world}"'
+    args = args.strip()
+    safe = re.sub(r'[<>:"/\\|?*]', "_", label or instance.name)
     link = desktop_dir() / f"{safe}.lnk"
     icon = str(icon_ico) if icon_ico and icon_ico.exists() else program
     script = (
@@ -48,7 +55,7 @@ def create_instance_shortcut(instance, icon_ico: Path | None) -> Path:
         "$s.WorkingDirectory = " + _ps_quote(str(Path(program).parent if getattr(sys, "frozen", False)
                                                     else Path(__file__).resolve().parent.parent)) + "; "
         "$s.IconLocation = " + _ps_quote(icon) + "; "
-        "$s.Description = " + _ps_quote(f"{instance.name} mit ModNest starten") + "; "
+        "$s.Description = " + _ps_quote(f"{label or instance.name} mit ModNest starten") + "; "
         "$s.Save()"
     )
     result = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True,

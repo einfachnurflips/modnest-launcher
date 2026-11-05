@@ -12,6 +12,8 @@ LOADER_TYPES = {"forge": 1, "fabric": 4, "quilt": 5, "neoforge": 6}
 LOADER_NAMES = {"forge", "fabric", "quilt", "neoforge"}
 RELEASE_TYPES = {1: "release", 2: "beta", 3: "alpha"}
 RELATION_REQUIRED = 3
+# Sortierung: relevance → Popularität, downloads → Gesamt-Downloads, newest → Veröffentlichung, updated → letztes Update
+SORT_FIELDS = {"relevance": 2, "downloads": 6, "newest": 11, "updated": 3}
 
 
 class CurseForge:
@@ -50,12 +52,12 @@ class CurseForge:
         )
 
     def search(self, query: str, mc_version: str, loader: str, offset: int = 0, limit: int = 30,
-               kind: str = "mods") -> list[Project]:
+               kind: str = "mods", sort: str = "", category: str = "") -> list[Project]:
         params = {
             "gameId": GAME_MINECRAFT,
             "classId": CLASS_IDS[kind],
             "searchFilter": query,
-            "sortField": 2,          # Popularität
+            "sortField": SORT_FIELDS.get(sort, 2),   # Standard: Popularität
             "sortOrder": "desc",
             "index": offset,
             "pageSize": limit,
@@ -64,6 +66,8 @@ class CurseForge:
             params["gameVersion"] = mc_version
         if kind == "mods" and loader in LOADER_TYPES:
             params["modLoaderType"] = LOADER_TYPES[loader]
+        if category:
+            params["categoryId"] = category
         return [self._project(m, kind) for m in self._get("/mods/search", **params)]
 
     def get_project(self, project_id: str, kind: str = "mods") -> Project:
@@ -101,3 +105,30 @@ class CurseForge:
             raise SourceError(tr("Keine Datei für Minecraft {mc}{loader} verfügbar.").format(
                 mc=mc_version, loader=f" ({loader})" if kind == "mods" else ""))
         return pick_latest(versions)
+
+    def details(self, project_id: str) -> dict:
+        mod = self._get(f"/mods/{project_id}")
+        try:
+            body = self._get(f"/mods/{project_id}/description")
+        except SourceError:
+            body = mod.get("summary", "")
+        links = mod.get("links") or {}
+        return {
+            "body": body,
+            "format": "html",
+            "gallery": [(s.get("url"), s.get("thumbnailUrl"), s.get("title") or "") for s in mod.get("screenshots", [])],
+            "links": {k: v for k, v in {"source": links.get("sourceUrl"), "issues": links.get("issuesUrl"),
+                                         "wiki": links.get("wikiUrl")}.items() if v},
+            "updated": mod.get("dateModified", ""),
+            "followers": mod.get("thumbsUpCount", 0),
+            "downloads": int(mod.get("downloadCount", 0)),
+            "license": "",
+            "categories": [c.get("name", "") for c in mod.get("categories", [])],
+            "versions": sorted({f.get("gameVersion") for f in mod.get("latestFilesIndexes", []) if f.get("gameVersion")})[-6:],
+        }
+
+    def categories(self, kind: str) -> list[tuple[int, str]]:
+        cats = self._get("/categories", gameId=GAME_MINECRAFT, classId=CLASS_IDS.get(kind, kind))
+        cid = CLASS_IDS.get(kind, kind)
+        return sorted(((c["id"], c["name"]) for c in cats if c.get("parentCategoryId") == cid), key=lambda c: c[1])
+

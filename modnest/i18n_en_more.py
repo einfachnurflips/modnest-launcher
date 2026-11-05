@@ -310,6 +310,24 @@ MORE = {
     "＋  Eine eigene Instanz erstellen": "＋  Create my own instance",
     "🔄  Instanzen aus einem anderen Launcher übernehmen": "🔄  Import instances from another launcher",
     "Schritt {n} von {total}": "Step {n} of {total}",
+    # 3D-Skin, Verknüpfungen, BlueMap
+    "Ziehen zum Drehen, Doppelklick setzt die Ansicht zurück": "Drag to rotate, double-click resets the view",
+    "↺ Aktuellen Skin zeigen": "↺ Show current skin",
+    "👁 Vorschau – erst mit „Anwenden“ wird sie übernommen.": "👁 Preview – only applied after “Apply”.",
+    "Läuft auf dem Server die Mod/das Plugin BlueMap, kannst du dir die 3D-Karte hier ansehen. Meist ist sie unter Port 8100 erreichbar – sonst frag den Server-Betreiber nach der Adresse.":
+        "If the server runs the BlueMap mod/plugin, you can view its 3D map here. It's usually on port 8100 – otherwise ask the server owner for the address.",
+    "Prüfen": "Check",
+    "Im Browser öffnen": "Open in browser",
+    "🗺  Karte öffnen": "🗺  Open map",
+    "✔ BlueMap gefunden": "✔ BlueMap found",
+    "🗺 Karte – {name}": "🗺 Map – {name}",
+    "BlueMap von {name}": "BlueMap of {name}",
+    "Prüfe {url} …": "Checking {url} …",
+    "⚠ Unter dieser Adresse wurde keine BlueMap gefunden. Prüfe die Adresse oder frag den Server-Betreiber.":
+        "⚠ No BlueMap found at this address. Check the address or ask the server owner.",
+    "Desktop-Verknüpfung: startet direkt in diese Welt": "Desktop shortcut: starts straight into this world",
+    "Karte (BlueMap) öffnen": "Open map (BlueMap)",
+    "Desktop-Verknüpfung: verbindet direkt mit diesem Server": "Desktop shortcut: connects straight to this server",
     "Minecraft hat die erneute Anmeldung abgelehnt (403).\n\nDas passiert manchmal kurz nach der Freischaltung durch Microsoft. Warte ein paar Minuten und versuch es erneut. Hilft das nicht, entferne das Konto über den Konto-Button und füge es neu hinzu.":
         "Minecraft rejected the renewed sign-in (403).\n\nThis sometimes happens shortly after Microsoft approves an app. Wait a few minutes and try again. If that doesn't help, remove the account via the account button and add it again.",
 }

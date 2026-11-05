@@ -133,3 +133,84 @@ def restore_world(backup_zip: Path, instance) -> Path:
                 with zf.open(member) as src, open(out, "wb") as dst:
                     shutil.copyfileobj(src, dst)
     return target
+
+
+# --- Komplette Instanzen ----------------------------------------------------------
+INSTANCE_SKIP = {"logs", "crash-reports", ".modnest-tmp", "launcher-log.txt", ".fabric", ".mixin.out", "debug"}
+
+
+def instance_backup_dir(settings, instance_name: str = "") -> Path:
+    root = backup_root(settings) / "Instanzen"
+    return root / _safe(instance_name) if instance_name else root
+
+
+def backup_instance(instance, settings, include_worlds: bool = True, reason: str = "",
+                    progress=lambda *a: None, keep: int | None = None) -> Path:
+    """Sichert die komplette Instanz (Mods, Configs, Einstellungen, optional Welten) als ZIP."""
+    dst_dir = instance_backup_dir(settings, instance.name)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    target = dst_dir / f"{_safe(instance.name)}_{stamp}.zip"
+    files = []
+    for file in instance.path.rglob("*"):
+        rel = file.relative_to(instance.path)
+        if not file.is_file() or rel.parts[0] in INSTANCE_SKIP or file.name == "session.lock":
+            continue
+        if not include_worlds and rel.parts[0] == "saves":
+            continue
+        files.append((file, rel))
+    tmp = target.with_suffix(".part")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        zf.writestr("modnest-backup.json", json.dumps({
+            "name": instance.name, "created": time.time(), "worlds": include_worlds, "reason": reason,
+            "mc_version": instance.mc_version, "loader": instance.loader}, ensure_ascii=False))
+        for n, (file, rel) in enumerate(files, 1):
+            if n % 50 == 0 or n == len(files):
+                progress(None, n, len(files))
+            try:
+                zf.write(file, rel.as_posix())
+            except OSError:
+                continue
+    tmp.replace(target)
+    keep = keep if keep is not None else max(settings.backup_keep, 1)
+    backups = sorted(dst_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in backups[keep:]:
+        old.unlink(missing_ok=True)
+    return target
+
+
+def list_instance_backups(settings, instance_name: str | None = None) -> list[tuple[Path, dict]]:
+    root = instance_backup_dir(settings, instance_name or "")
+    if not root.exists():
+        return []
+    result = []
+    for zip_path in sorted(root.rglob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                meta = json.loads(zf.read("modnest-backup.json"))
+        except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+            meta = {"name": zip_path.parent.name, "created": zip_path.stat().st_mtime}
+        meta["size"] = zip_path.stat().st_size
+        result.append((zip_path, meta))
+    return result
+
+
+def restore_instance_backup(zip_path: Path, target: Path, progress=lambda *a: None) -> Path:
+    """Entpackt ein Instanz-Backup in den (leeren oder neuen) Ordner target."""
+    target.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf:
+        members = [m for m in zf.infolist() if m.filename != "modnest-backup.json"]
+        base = target.resolve()
+        for n, member in enumerate(members, 1):
+            out = (target / member.filename).resolve()
+            if base not in out.parents and out != base:
+                continue   # Schutz vor manipulierten ZIPs
+            if member.is_dir():
+                out.mkdir(parents=True, exist_ok=True)
+                continue
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(member) as src, open(out, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            if n % 50 == 0:
+                progress(None, n, len(members))
+    return target

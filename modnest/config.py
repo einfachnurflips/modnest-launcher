@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 APP_NAME = "ModNest"
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.4.0"
 USER_AGENT = f"ModNest-Launcher/{APP_VERSION}"
 
 
@@ -43,9 +43,12 @@ class Settings:
     backup_worlds: bool = True      # Welten beim Beenden des Spiels sichern
     backup_screenshots: bool = True # Screenshots automatisch sichern
     backup_keep: int = 5            # Anzahl Welt-Backups pro Welt
+    backup_before_updates: bool = True  # Instanz (ohne Welten) vor Mod-/Modpack-Updates sichern
     minimize_on_launch: bool = False  # Launcher beim Spielen minimieren
     discord_rpc: bool = True        # „Spielt …“ in Discord anzeigen
     discord_client_id: str = ""     # Discord-Anwendungs-ID (leer = aus)
+    tray_icon: bool = True          # Symbol im Infobereich der Taskleiste
+    close_to_tray: bool = False     # Schließen-Knopf versteckt ModNest nur im Tray
     extra: dict = field(default_factory=dict)
 
     KEY_FIELDS = ("curseforge_api_key", "ms_client_id", "discord_client_id")

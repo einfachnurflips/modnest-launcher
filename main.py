@@ -41,7 +41,13 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     # Läuft ModNest schon? Dann den Befehl dorthin schicken, statt ein zweites Fenster zu öffnen
-    command = "play:" + _arg("--play") if _arg("--play") else "show"
+    command = "show"
+    if _arg("--play"):
+        command = "play:" + _arg("--play")
+        if _arg("--server"):
+            command += "\nserver:" + _arg("--server")
+        elif _arg("--world"):
+            command += "\nworld:" + _arg("--world")
     if _send_to_running(command):
         return 0
     from modnest.config import APP_NAME, Settings, data_dir

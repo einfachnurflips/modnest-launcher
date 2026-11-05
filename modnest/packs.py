@@ -85,14 +85,19 @@ def _cf_key(settings) -> str:
 
 # --- Modrinth -------------------------------------------------------------------
 class ModrinthPacks:
-    def search(self, query, offset, mc, loader, settings):
+    def details(self, pack, settings):
+        from .sources.modrinth import details
+        return details(pack.pack_id)
+
+    def search(self, query, offset, mc, loader, settings, sort=""):
         facets = [["project_type:modpack"]]
         if mc:
             facets.append([f"versions:{mc}"])
         if loader:
             facets.append([f"categories:{loader}"])
         data = _get(f"{MR_API}/search", params={"query": query, "facets": json.dumps(facets), "offset": offset,
-                                                 "limit": PAGE_SIZE, "index": "relevance" if query else "downloads"})
+                                                 "limit": PAGE_SIZE,
+                                                 "index": sort or ("relevance" if query else "downloads")})
         return [PackInfo(
             provider="modrinth", pack_id=h["project_id"], name=h.get("title", ""), author=h.get("author", ""),
             summary=h.get("description", ""), icon_url=h.get("icon_url") or "", downloads=h.get("downloads", 0),
@@ -124,8 +129,13 @@ class ModrinthPacks:
 class CurseForgePacks:
     CLASS_ID = 4471
 
-    def search(self, query, offset, mc, loader, settings):
-        params = {"gameId": 432, "classId": self.CLASS_ID, "searchFilter": query, "sortField": 2,
+    def details(self, pack, settings):
+        from .sources.curseforge import CurseForge
+        return CurseForge(_cf_key(settings)).details(pack.pack_id)
+
+    def search(self, query, offset, mc, loader, settings, sort=""):
+        from .sources.curseforge import SORT_FIELDS
+        params = {"gameId": 432, "classId": self.CLASS_ID, "searchFilter": query, "sortField": SORT_FIELDS.get(sort, 2),
                   "sortOrder": "desc", "index": offset, "pageSize": PAGE_SIZE}
         if mc:
             params["gameVersion"] = mc
@@ -199,7 +209,15 @@ class FTBPacks:
             mc_versions=list(reversed(mcs)), loaders=loaders, extra={"versions": versions},
         )
 
-    def search(self, query, offset, mc, loader, settings):
+    def details(self, pack, settings):
+        p = _get(f"{self.API}/{pack.pack_id}")
+        shots = [(a["url"], a["url"], a.get("title", "")) for a in p.get("art", [])
+                 if a.get("type") in ("splash", "screenshot", "background") and a.get("url")]
+        return {"body": p.get("description") or p.get("synopsis", ""), "format": "markdown", "gallery": shots,
+                "links": {}, "updated": _iso(p.get("updated")), "downloads": int(p.get("installs", 0)),
+                "categories": [t.get("name", "") for t in p.get("tags", [])], "versions": pack.mc_versions[:6]}
+
+    def search(self, query, offset, mc, loader, settings, sort=""):
         if offset:
             return []
         if query:
@@ -278,7 +296,14 @@ class TechnicPacks:
             extra={"solder": p.get("solder") or "", "zip": p.get("url") or "", "version": p.get("version", "")},
         )
 
-    def search(self, query, offset, mc, loader, settings):
+    def details(self, pack, settings):
+        p = _get(f"{self.API}/modpack/{pack.pack_id}", params={"build": 999})
+        gallery = [(p[k]["url"], p[k]["url"], "") for k in ("background", "logo") if (p.get(k) or {}).get("url")]
+        return {"body": p.get("description") or "", "format": "html", "gallery": gallery,
+                "links": {"website": p.get("platformUrl")} if p.get("platformUrl") else {},
+                "downloads": int(p.get("installs", 0)), "categories": [], "versions": pack.mc_versions}
+
+    def search(self, query, offset, mc, loader, settings, sort=""):
         if offset:
             return []
         if not query:
@@ -372,7 +397,14 @@ class ATLauncherPacks:
             ATLauncherPacks._cache = (time.time(), data)
         return data
 
-    def search(self, query, offset, mc, loader, settings):
+    def details(self, pack, settings):
+        p = next((x for x in self._all() if x.get("safeName") == pack.pack_id), {})
+        links = {k: v for k, v in {"website": p.get("websiteURL"), "discord": p.get("discordInviteURL"),
+                                   "issues": p.get("supportURL")}.items() if v}
+        return {"body": p.get("description") or pack.summary, "format": "text", "gallery": [], "links": links,
+                "categories": [], "versions": pack.mc_versions[:6]}
+
+    def search(self, query, offset, mc, loader, settings, sort=""):
         q = query.lower()
         packs = []
         for p in self._all():

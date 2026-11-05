@@ -311,6 +311,9 @@ class ContentPage(QWidget):
                     menu.addAction(tr("⚙  Version ändern …"), lambda: self.versionRequested.emit(self.kind, entry))
                 if entry and entry.url:
                     menu.addAction(tr("Projektseite öffnen"), lambda: QDesktopServices.openUrl(QUrl(entry.url)))
+                if entry:
+                    menu.addAction(tr("📝  Notiz bearbeiten …") if entry.note else tr("📝  Notiz hinzufügen …"),
+                                   lambda: self.edit_note(entry))
             menu.addSeparator()
             menu.addAction(tr("Entfernen …"), lambda: self.remove_items(files))
             menu.addSeparator()
@@ -318,6 +321,14 @@ class ContentPage(QWidget):
         menu.addAction(tr("Unkategorisierte automatisch einsortieren"), self.auto_sort)
         menu.addAction(tr("Neu laden"), self.refresh)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def edit_note(self, entry) -> None:
+        text, ok = QInputDialog.getMultiLineText(
+            self, tr("Notiz – {name}").format(name=entry.name or entry.file),
+            tr("Deine Notiz (z.B. „nicht updaten, crasht mit Iris 1.8“). Leer lassen zum Löschen:"), entry.note)
+        if ok:
+            entry.note = text.strip()
+            self.rebuild()
 
     def _delete_selected(self) -> None:
         files = [self.tree.key(i) for i in self.tree.selected_of_kind(MOD)]

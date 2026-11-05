@@ -95,7 +95,8 @@ class ModTree(QTreeWidget):
 
     def _make_mod(self, mod) -> QTreeWidgetItem:
         version = (mod.version_name or "–") + ("  📌" if mod.pinned else "")
-        item = QTreeWidgetItem([mod.name or mod.file, version, SOURCE_LABELS.get(mod.source, mod.source), ""])
+        title = (mod.name or mod.file) + ("   📝" if mod.note else "")
+        item = QTreeWidgetItem([title, version, SOURCE_LABELS.get(mod.source, mod.source), ""])
         if mod.project_id and mod.source != "local":
             item.setText(self.GEAR_COLUMN, "⚙")
             item.setToolTip(self.GEAR_COLUMN, tr("Version ändern"))
@@ -112,6 +113,8 @@ class ModTree(QTreeWidget):
                       | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(0, Qt.CheckState.Checked if mod.enabled else Qt.CheckState.Unchecked)
         tip = f"<b>{mod.name}</b><br>{mod.description}<br><i>{mod.file}</i>" if mod.description else mod.file
+        if mod.note:
+            tip += "<br><br>📝 <b>" + tr("Notiz") + ":</b> " + mod.note.replace("<", "&lt;").replace(chr(10), "<br>")
         item.setToolTip(0, tip)
         if not mod.enabled:
             for col in range(3):

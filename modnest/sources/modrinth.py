@@ -32,9 +32,14 @@ def _project_from_hit(hit: dict, kind: str) -> Project:
     )
 
 
+SORTS = {"relevance": "relevance", "downloads": "downloads", "newest": "newest", "updated": "updated"}
+
+
 def search(query: str, mc_version: str, loader: str, offset: int = 0, limit: int = 30,
-           kind: str = "mods") -> list[Project]:
+           kind: str = "mods", sort: str = "", category: str = "") -> list[Project]:
     facets = [[f"project_type:{PROJECT_TYPES[kind]}"]]
+    if category:
+        facets.append([f"categories:{category}"])
     if kind == "mods" and loader and loader != "vanilla":
         facets.append([f"categories:{loader}"])
     if mc_version:
@@ -43,7 +48,7 @@ def search(query: str, mc_version: str, loader: str, offset: int = 0, limit: int
         "/search",
         query=query,
         facets=json.dumps(facets),
-        index="relevance" if query else "downloads",
+        index=SORTS.get(sort) or ("relevance" if query else "downloads"),
         offset=offset,
         limit=limit,
     )
@@ -105,3 +110,30 @@ def resolve(project_id: str, mc_version: str, loader: str, kind: str = "mods") -
         raise SourceError(tr("Keine Version für Minecraft {mc}{loader} verfügbar.").format(
             mc=mc_version, loader=f" ({loader})" if kind == "mods" else ""))
     return pick_latest(versions)
+
+
+def details(project_id: str) -> dict:
+    """Beschreibung, Bilder und Links für die Projektseite."""
+    p = _get(f"/project/{project_id}")
+    links = {"source": p.get("source_url"), "issues": p.get("issues_url"), "wiki": p.get("wiki_url"),
+             "discord": p.get("discord_url")}
+    return {
+        "body": p.get("body") or p.get("description", ""),
+        "format": "markdown",
+        "gallery": [(g.get("raw_url") or g["url"], g.get("url"), g.get("title") or "") for g in
+                    sorted(p.get("gallery", []), key=lambda g: g.get("ordering", 0))],
+        "links": {k: v for k, v in links.items() if v},
+        "updated": p.get("updated", ""),
+        "followers": p.get("followers", 0),
+        "downloads": p.get("downloads", 0),
+        "license": (p.get("license") or {}).get("name") or (p.get("license") or {}).get("id", ""),
+        "categories": list(p.get("categories", [])),
+        "versions": list(p.get("game_versions", []))[-6:],
+    }
+
+
+def categories(kind: str) -> list[str]:
+    """Kategorien einer Inhaltsart (ohne Loader/Auflösungen)."""
+    ptype = PROJECT_TYPES.get(kind, kind)
+    tags = _get("/tag/category")
+    return sorted(t["name"] for t in tags if t.get("project_type") == ptype and t.get("header") == "categories")

@@ -15,6 +15,8 @@ from .. import game, packs
 from ..i18n import tr
 from ..instances import LOADERS
 from .fmt import downloads_text
+from .project_page import ProjectDialog
+from .search_page import SORT_LABELS
 from .workers import run_task
 
 TYPE_LABELS = {"release": (tr("Release"), "#22c55e"), "beta": (tr("Beta"), "#f59e0b"), "alpha": (tr("Alpha"), "#ef4444")}
@@ -78,6 +80,12 @@ class PacksPage(QWidget):
             self.loader.addItem(LOADERS.get(key, key), key)
         self.loader.currentIndexChanged.connect(lambda _: self.search())
         bar.addWidget(self.loader)
+        self.sort = QComboBox()
+        for key, label in SORT_LABELS.items():
+            self.sort.addItem(label, key)
+        self.sort.setToolTip(tr("Sortierung (Modrinth und CurseForge)"))
+        self.sort.currentIndexChanged.connect(lambda _: self.search())
+        bar.addWidget(self.sort)
         go = QPushButton(tr("Suchen"))
         go.setObjectName("primary")
         go.clicked.connect(self.search)
@@ -99,7 +107,7 @@ class PacksPage(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for col in (1, 2, 3):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        self.tree.itemDoubleClicked.connect(lambda *_: self.pick_version())
+        self.tree.itemDoubleClicked.connect(lambda *_: self.open_details())
         self.tree.itemSelectionChanged.connect(self._selection_changed)
         self.tree.verticalScrollBar().valueChanged.connect(self._maybe_more)
         layout.addWidget(self.tree, 1)
@@ -108,8 +116,9 @@ class PacksPage(QWidget):
         self.provider_hint = QLabel()
         self.provider_hint.setObjectName("hint")
         bottom.addWidget(self.provider_hint, 1)
-        page = QPushButton(tr("Projektseite"))
-        page.clicked.connect(self.open_page)
+        page = QPushButton(tr("ℹ  Details"))
+        page.setToolTip(tr("Beschreibung, Bilder und Links ansehen (auch per Doppelklick)"))
+        page.clicked.connect(self.open_details)
         bottom.addWidget(page)
         self.version_btn = QPushButton(tr("⚙  Version wählen …"))
         self.version_btn.clicked.connect(self.pick_version)
@@ -161,8 +170,10 @@ class PacksPage(QWidget):
         sid = self._search_id
         key, query, offset = self.provider_key, self.query.text().strip(), self.offset
         mc, loader = self.mc.currentData() or "", self.loader.currentData() or ""
+        sort = self.sort.currentData() if key in ("modrinth", "curseforge") else ""
+        self.sort.setEnabled(key in ("modrinth", "curseforge"))
         self.info.setText(tr("Suche Modpacks auf {source} …").format(source=packs.PROVIDERS[key]))
-        run_task(lambda: packs.provider(key).search(query, offset, mc, loader, self.settings),
+        run_task(lambda: packs.provider(key).search(query, offset, mc, loader, self.settings, sort),
                  lambda res: self._show(sid, res), lambda err: self._error(sid, err))
 
     def _maybe_more(self, value: int) -> None:
@@ -189,7 +200,7 @@ class PacksPage(QWidget):
         if not self.results:
             self.info.setText(tr("Keine Modpacks gefunden. Probier einen anderen Suchbegriff oder Filter."))
         else:
-            self.info.setText(tr("{n} Modpacks auf {source}. Doppelklick zeigt alle Versionen.").format(
+            self.info.setText(tr("{n} Modpacks auf {source}. Doppelklick zeigt Details.").format(
                 n=len(self.results), source=packs.PROVIDERS[self.provider_key]))
 
     @staticmethod
@@ -224,6 +235,18 @@ class PacksPage(QWidget):
             dlg = PackVersionDialog(pack, self.settings, self.icon_loader, self)
             if dlg.exec() and dlg.selected is not None:
                 self.installRequested.emit(pack, dlg.selected)
+
+    def open_details(self) -> None:
+        pack = self._selected()
+        if not pack:
+            return
+        settings = self.settings
+        dlg = ProjectDialog(pack.name, f"{packs.PROVIDERS[pack.provider]} · {pack.author}" if pack.author
+                            else packs.PROVIDERS[pack.provider], pack.summary, pack.icon_url, pack.url,
+                            lambda: packs.provider(pack.provider).details(pack, settings), self.icon_loader, self)
+        dlg.installLatest.connect(lambda: self.installRequested.emit(pack, None))
+        dlg.chooseVersion.connect(self.pick_version)
+        dlg.exec()
 
     def open_page(self) -> None:
         pack = self._selected()

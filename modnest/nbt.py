@@ -70,3 +70,27 @@ def read_nbt(path: Path) -> dict:
         raise ValueError("Keine NBT-Datei")
     reader.string()
     return reader.payload(10)
+
+
+# --- Schreiben (nur was servers.dat braucht) ------------------------------------------
+def _w_string(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    return struct.pack(">H", len(raw)) + raw
+
+
+def write_servers(path: Path, servers: list[dict]) -> None:
+    """Schreibt servers.dat. servers: [{name, ip, icon (Base64, optional), acceptTextures (0/1, optional)}]."""
+    out = bytearray(b"\x0a" + _w_string(""))
+    out += b"\x09" + _w_string("servers") + b"\x0a" + struct.pack(">i", len(servers))
+    for s in servers:
+        for key in ("name", "ip", "icon"):
+            if s.get(key):
+                out += b"\x08" + _w_string(key) + _w_string(str(s[key]))
+        for key in ("acceptTextures", "hidden"):
+            if key in s and s[key] is not None:
+                out += b"\x01" + _w_string(key) + struct.pack(">b", int(s[key]))
+        out += b"\x00"
+    out += b"\x00"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(bytes(out))
+    tmp.replace(path)

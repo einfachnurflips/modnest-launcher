@@ -8,16 +8,21 @@ Ein Minecraft-Launcher für Windows: **fertige Modpacks** von Modrinth, CurseFor
 
 ## Features
 
-**Fertige Modpacks** *(neu in 0.3)*
+**Fertige Modpacks**
 - Suchen und installieren von **Modrinth, CurseForge, Feed The Beast, Technic und ATLauncher**, mit Filter nach Minecraft-Version und Loader
 - **Versionswahl mit Changelog**, empfohlener Arbeitsspeicher wird automatisch übernommen
 - **Modpack-Updates** auf Home – deine Welten, Einstellungen und selbst hinzugefügten Mods bleiben erhalten, vorher wird automatisch ein Backup angelegt
 - **Download-Hilfe** für Mods, die nur über die Webseite geladen werden dürfen: Datei im Browser laden, ModNest erkennt sie im Downloads-Ordner und baut sie ein
 - **Parallele, geprüfte Downloads** (Prüfsummen, automatische Wiederholung)
 
+**Entdecken** *(neu in 0.4)*
+- **Projektseite im Launcher**: Beschreibung mit Bildern, Galerie, Downloads, Kategorien und Links – für Mods, Texturepacks, Shader und Modpacks
+- **Filter nach Kategorie** und **Sortierung** (beliebt, Downloads, zuletzt aktualisiert, neueste)
+
 **Home**
 - **Weiterspielen**, **zuletzt gespielte Welten und Server** mit **Beitreten** (ab Minecraft 1.20)
 - **Server-Status live**: online/offline, Spieler und Ping
+- **🖥 Desktop-Verknüpfung** direkt auf einen Server oder in eine Welt, **🗺 BlueMap-Karte** eines Servers im eigenen Fenster
 - **Updates** für Mods und Modpacks, jeweils mit „Was ist neu?“
 - **Minecraft-News** und Patch-Notes
 
@@ -27,6 +32,7 @@ Ein Minecraft-Launcher für Windows: **fertige Modpacks** von Modrinth, CurseFor
 - **⚡ Performance-Paket**: Sodium, Lithium, FerriteCore, ModernFix & Co. passend zu Version und Loader
 - **🗂 Mod-Profile**: An/Aus-Zustände speichern („PvP“, „Shader-Modus“, „Laptop“) und mit einem Klick umschalten
 - **⚙ Versionswahl** für jeden Eintrag, Texturepack-Reihenfolge wird ins Spiel übernommen
+- **📝 Notizen pro Mod**, z.B. „nicht updaten, crasht mit X“
 
 **Instanzen**
 - Vanilla, Fabric, Quilt, Forge, NeoForge – mit **eigenen Icons**, **Kopieren**, **Spielzeit**
@@ -36,6 +42,10 @@ Ein Minecraft-Launcher für Windows: **fertige Modpacks** von Modrinth, CurseFor
 - **Modpacks teilen** als `.mrpack` oder CurseForge-ZIP
 - **Standard-Optionen**: Tastenbelegung, Sichtweite usw. automatisch für neue Instanzen
 - **Desktop-Verknüpfung** pro Instanz, die direkt ins Spiel startet
+- **🖧 Server verwalten** ohne das Spiel zu starten (gleiche Liste wie im Spiel)
+- **🌍 Welten verwalten**: ZIP importieren/exportieren, in andere Instanzen kopieren, **Datapacks direkt von Modrinth**
+- **🗄 Komplette Instanz-Backups** (auch automatisch vor Updates) mit Wiederherstellung
+- **Konto pro Instanz**
 
 **Screenshots, Backups & Cloud**
 - Screenshot-Galerie, automatische Welt- und Screenshot-Backups, Backup-Ordner per Klick in OneDrive, Dropbox, iCloud Drive oder Google Drive
@@ -43,13 +53,18 @@ Ein Minecraft-Launcher für Windows: **fertige Modpacks** von Modrinth, CurseFor
 **Sonstiges**
 - **📜 Spiel-Konsole** mit Live-Log, Fehler farbig, „Log teilen“ über mclo.gs
 - **Absturz-Helfer** mit Ursache und verdächtigen Mods
-- **👕 Skin & Umhang** wechseln (Microsoft-Konto), eigene Skin-Bibliothek
+- **👕 Skin & Umhang** wechseln (Microsoft-Konto) mit **drehbarer 3D-Vorschau**, eigene Skin-Bibliothek
 - **Discord-Status** („Spielt …“), Launcher beim Spielen minimieren
-- **Speicherplatz-Übersicht** und Aufräumen
+- **Speicherplatz-Übersicht** und Aufräumen, **☕ Java-Verwaltung** (inkl. Download von Eclipse Temurin)
+- **Tray-Symbol** mit Schnellstart der letzten Instanzen, nur ein ModNest gleichzeitig
 - **Einrichtungs-Assistent** beim ersten Start, Hell/Dunkel, **Deutsch/English**
 - **Offline-Konten** und **Microsoft-Login** (Device-Code, Tokens mit Windows-DPAPI verschlüsselt)
 - Gelöschte Instanzen und Mods landen im **Papierkorb**
 
+<p align="center">
+  <img src="docs/project.png" alt="Projektseite" width="410">
+  <img src="docs/skin3d.png" alt="3D-Skin" width="410">
+</p>
 <p align="center">
   <img src="docs/modpacks.png" alt="Modpack-Browser" width="410">
   <img src="docs/compat.png" alt="Kompatibilitäts-Check" width="410">

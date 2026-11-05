@@ -1,5 +1,6 @@
 """Hauptfenster: Seitenleiste (Home, Screenshots, Instanzen), Seiten in der Mitte, Spielen-Leiste unten."""
 import os
+import re
 import shutil
 import time
 import zipfile
@@ -9,7 +10,7 @@ from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFileDialog, QGraphicsDropShadowEffect, QHBoxLayout, QInputDialog, QLabel,
-    QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QStackedWidget,
+    QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QStackedWidget, QSystemTrayIcon,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -22,8 +23,9 @@ from ..instances import (
 from ..sources import SourceError, modrinth
 from . import style
 from .content_page import ContentPage
-from .comfort_dialogs import ImportLaunchersDialog, LogWindow, SkinDialog
+from .comfort_dialogs import ImportLaunchersDialog, LogWindow, MapDialog, SkinDialog
 from .instance_list import InstanceList
+from .manage_dialogs import InstanceBackupsDialog, ServersDialog, WorldsDialog
 from .packs_page import ManualDownloadDialog, PackVersionDialog, PacksPage
 from .tools_dialogs import ChangelogDialog, PerfDialog
 from .dialogs import DuplicateDialog, IconPickerDialog, InstanceSettingsDialog, NewInstanceDialog, SettingsDialog
@@ -93,6 +95,10 @@ class MainWindow(QMainWindow):
         self.home.packUpdateRequested.connect(self.update_pack)
         self.home.changelogRequested.connect(self.show_changelog)
         self.home.launcherUpdateRequested.connect(self.update_launcher)
+        self.home.shortcutRequested.connect(
+            lambda inst, kind, target, label, pix: self.create_shortcut(
+                inst, target if kind == "server" else "", target if kind == "world" else "", label, pix))
+        self.home.mapRequested.connect(self.open_map)
         self.packs_page = PacksPage(settings, self.icon_loader)
         self.packs_page.installRequested.connect(self.install_pack)
         self.screens = ScreenshotsPage(settings)
@@ -110,6 +116,8 @@ class MainWindow(QMainWindow):
         self._update_account()
         self.reload_instances(select=settings.last_instance, show_home=True)
         run_task(news.launcher_update, self.home.show_launcher_update)
+        self._quitting = False
+        self._setup_tray()
 
     # --- Aufbau ------------------------------------------------------------
     def _build_sidebar(self) -> QWidget:
@@ -509,6 +517,9 @@ class MainWindow(QMainWindow):
         menu.addAction(tr("📤  Als Modpack teilen …"), self.export_modpack)
         if self.instance.pack:
             menu.addAction(tr("📦  Modpack-Version ändern …"), self.change_pack_version)
+        menu.addAction(tr("🌍  Welten & Datapacks …"), self.manage_worlds)
+        menu.addAction(tr("🖧  Server verwalten …"), self.manage_servers)
+        menu.addAction(tr("🗄  Instanz-Backups …"), self.instance_backups)
         menu.addAction(tr("💾  Welt-Backups …"), lambda: WorldBackupsDialog(self.instance, self.settings, self).exec())
         menu.addAction(tr("📁  Ordner öffnen"), self.open_instance_folder)
         menu.addAction(tr("📜  Konsole / Log"), lambda: self.show_console(self.instance))
@@ -580,7 +591,8 @@ class MainWindow(QMainWindow):
                               QMessageBox.warning(self, tr("Kopieren"), err)))
 
     def instance_settings(self) -> None:
-        if self.instance and InstanceSettingsDialog(self.instance, self.settings, self).exec():
+        if self.instance and InstanceSettingsDialog(self.instance, self.settings, self,
+                                                    self.accounts.accounts).exec():
             self.status(tr("✔ Einstellungen von „{name}“ gespeichert.").format(name=self.instance.name))
             self._update_header()
 
@@ -655,14 +667,46 @@ class MainWindow(QMainWindow):
         self.show()
         self.raise_()
         self.activateWindow()
-        if command.startswith("play:"):
-            key = command[5:]
+        lines = dict(line.split(":", 1) for line in command.splitlines() if ":" in line)
+        if "play" in lines:
+            key = lines["play"]
             inst = next((i for i in self.instances if i.path.name == key or i.name == key), None)
             if inst is None:
                 self.reload_instances(show_home=True)
                 inst = next((i for i in self.instances if i.path.name == key or i.name == key), None)
             if inst is not None:
-                self.play(inst)
+                target = ("server", lines["server"]) if lines.get("server") else \
+                    ("world", lines["world"]) if lines.get("world") else None
+                self.play(inst, target)
+
+    def manage_servers(self, inst=None) -> None:
+        inst = inst or self.instance
+        if not inst:
+            return
+        running = self.game_process is not None and self.game_instance is inst
+        dlg = ServersDialog(inst, self.instances, running, self)
+        dlg.joinRequested.connect(lambda i, a: self.play(i, ("server", a)))
+        dlg.exec()
+        self.home.refresh(self.instances, None) if self.stack.currentWidget() is self.home else None
+
+    def manage_worlds(self, inst=None) -> None:
+        inst = inst or self.instance
+        if not inst:
+            return
+        dlg = WorldsDialog(inst, self.instances, self.settings, self)
+        dlg.playRequested.connect(lambda i, f: self.play(i, ("world", f)))
+        dlg.exec()
+
+    def instance_backups(self) -> None:
+        if not self.instance:
+            return
+        dlg = InstanceBackupsDialog(self.instance, self.settings, self)
+        dlg.restored.connect(lambda path: (self.reload_instances(select=path),
+                                           self.status(tr("✔ Backup wiederhergestellt."))))
+        dlg.exec()
+
+    def open_map(self, address: str, name: str) -> None:
+        MapDialog(self.settings, address, name, self).exec()
 
     def update_launcher(self, info: dict) -> None:
         if self.game_process is not None:
@@ -734,14 +778,16 @@ class MainWindow(QMainWindow):
         win.raise_()
         win.activateWindow()
 
-    def create_shortcut(self) -> None:
-        inst = self.instance
+    def create_shortcut(self, inst=None, server: str = "", world: str = "", label: str = "", pixmap=None) -> None:
+        inst = inst or self.instance
         if not inst:
             return
-        ico = shortcuts.icon_cache_dir() / f"{inst.path.name}.ico"
+        key = re.sub(r"[^A-Za-z0-9_-]", "_", f"{inst.path.name}-{server or world}")
+        ico = shortcuts.icon_cache_dir() / f"{key}.ico"
         try:
-            save_ico(ico, instance_icon(inst, 256).pixmap(256, 256))
-            link = shortcuts.create_instance_shortcut(inst, ico)
+            pix = pixmap if pixmap is not None and not pixmap.isNull() else instance_icon(inst, 256).pixmap(256, 256)
+            save_ico(ico, pix.scaled(256, 256, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            link = shortcuts.create_instance_shortcut(inst, ico, server, world, label)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, tr("Verknüpfung"), tr("Die Verknüpfung konnte nicht erstellt werden:\n{e}").format(e=exc))
             return
@@ -865,7 +911,13 @@ class MainWindow(QMainWindow):
                 "{e}\n\nEin Backup deiner Mods und Configs liegt im Backup-Ordner unter „Modpack-Updates“.").format(e=err))
 
         self.on_progress(tr("Aktualisiere {name} …").format(name=inst.name), 0, 0)
-        run_task(lambda progress: packs.update(inst, pack, version, settings, progress), done, fail, self.on_progress)
+        def work(progress):
+            if settings.backup_before_updates:
+                progress(tr("Sichere „{name}“ vor dem Update …").format(name=inst.name), 0, 0)
+                backup.backup_instance(inst, settings, False, tr("vor Modpack-Update"), progress)
+            return packs.update(inst, pack, version, settings, progress)
+
+        run_task(work, done, fail, self.on_progress)
 
     def _refresh_pages(self) -> None:
         if self.instance:
@@ -934,6 +986,10 @@ class MainWindow(QMainWindow):
             if self.stack.currentWidget() is self.home:
                 self.home.refresh(self.instances, None)
             self._update_account()
+            if (getattr(self, "tray", None) is not None) != self.settings.tray_icon:
+                if getattr(self, "tray", None) is not None:
+                    self.tray.hide()
+                self._setup_tray()
             self.status(tr("Einstellungen gespeichert."))
             if getattr(dlg, "language_changed", False):
                 QMessageBox.information(self, "ModNest", tr("Starte den Launcher neu, um die Sprache zu wechseln.\n"
@@ -1038,6 +1094,17 @@ class MainWindow(QMainWindow):
             self.queue_install(project, item.category, dlg.selected)
 
     def apply_updates(self, inst, ups: list) -> None:
+        if self.settings.backup_before_updates and ups:
+            settings = self.settings
+            self.on_progress(tr("Sichere „{name}“ vor dem Update …").format(name=inst.name), 0, 0)
+            run_task(lambda: backup.backup_instance(inst, settings, False, tr("vor Mod-Updates")),
+                     lambda _: (self._done(tr("✔ Backup angelegt.")), self._queue_updates(inst, ups)),
+                     lambda err: (self._done(tr("⚠ Backup fehlgeschlagen: {e}").format(e=err)),
+                                  self._queue_updates(inst, ups)))
+            return
+        self._queue_updates(inst, ups)
+
+    def _queue_updates(self, inst, ups: list) -> None:
         for upd in ups:
             self.queue_install(installer.project_from_item(upd.item, upd.kind), upd.item.category, upd.release,
                                instance=inst, pin=False)
@@ -1154,7 +1221,8 @@ class MainWindow(QMainWindow):
         if self.installing:
             QMessageBox.information(self, tr("Bitte warten"), tr("Es werden gerade noch Inhalte installiert."))
             return
-        account = self.accounts.active
+        account = next((a for a in self.accounts.accounts if inst.account_id and a.id == inst.account_id), None) \
+            or self.accounts.active
         if account is None:
             QMessageBox.information(self, tr("Kein Konto"), tr("Bitte zuerst über den Konto-Button ein Konto hinzufügen."))
             return
@@ -1262,7 +1330,52 @@ class MainWindow(QMainWindow):
         self.play_btn.setText(tr("▶   SPIELEN"))
         self.play_btn.setEnabled(bool(self.instances))
 
+    # --- Tray ---------------------------------------------------------------
+    def _setup_tray(self) -> None:
+        self.tray = None
+        if not self.settings.tray_icon or not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self.tray = QSystemTrayIcon(app_icon(), self)
+        self.tray.setToolTip("ModNest")
+        self.tray_menu = QMenu(self)
+        self.tray_menu.aboutToShow.connect(self._fill_tray_menu)
+        self.tray.setContextMenu(self.tray_menu)
+        self.tray.activated.connect(lambda reason: self.handle_command("show")
+                                    if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                                                  QSystemTrayIcon.ActivationReason.DoubleClick) else None)
+        self.tray.show()
+
+    def _fill_tray_menu(self) -> None:
+        menu = self.tray_menu
+        menu.clear()
+        menu.addAction(tr("🏠  ModNest öffnen"), lambda: self.handle_command("show"))
+        menu.addSeparator()
+        recent = sorted(self.instances, key=lambda i: i.last_played, reverse=True)[:5]
+        if self.game_process is not None:
+            act = menu.addAction(tr("●  Minecraft läuft ({name})").format(name=self.game_instance.name))
+            act.setEnabled(False)
+        else:
+            for inst in recent:
+                menu.addAction(instance_icon(inst, 24), tr("▶  {name}").format(name=inst.name),
+                               lambda i=inst: self.play(i))
+        menu.addSeparator()
+        menu.addAction(tr("Beenden"), self.quit_app)
+
+    def quit_app(self) -> None:
+        self._quitting = True
+        self.close()
+        QApplication.instance().quit()
+
     def closeEvent(self, event) -> None:
+        if self.settings.close_to_tray and getattr(self, "tray", None) is not None and not self._quitting:
+            event.ignore()
+            self.hide()
+            if not self.settings.extra.get("tray_hint_shown"):
+                self.tray.showMessage("ModNest", tr("ModNest läuft hier weiter. Rechtsklick auf das Symbol → Beenden."),
+                                      app_icon(), 4000)
+                self.settings.extra["tray_hint_shown"] = True
+                self.settings.save()
+            return
         for page in self.pages.values():
             if page.instance:
                 page.save_layout()

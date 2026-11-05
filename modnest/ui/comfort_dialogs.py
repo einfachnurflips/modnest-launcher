@@ -11,9 +11,10 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .. import importers, skins, storage
+from .. import bluemap, importers, skins, storage
 from ..i18n import tr
 from ..sources.base import session
+from .skin3d import SkinViewer
 from .workers import run_task
 
 
@@ -354,18 +355,24 @@ class SkinDialog(QDialog):
         lay.setSpacing(18)
 
         left = QVBoxLayout()
-        self.preview = QLabel()
-        self.preview.setFixedSize(16 * 12 + 20, 32 * 12 + 20)
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setObjectName("card")
-        left.addWidget(self.preview)
+        self.viewer = SkinViewer()
+        self.viewer.setFixedSize(260, 400)
+        self.viewer.setToolTip(tr("Ziehen zum Drehen, Doppelklick setzt die Ansicht zurück"))
+        left.addWidget(self.viewer)
         self.current = QLabel(tr("Lade aktuellen Skin …"))
         self.current.setObjectName("hint")
         self.current.setWordWrap(True)
-        self.current.setMaximumWidth(16 * 12 + 20)
+        self.current.setMaximumWidth(260)
         left.addWidget(self.current)
+        self.reset_btn = QPushButton(tr("↺ Aktuellen Skin zeigen"))
+        self.reset_btn.setObjectName("small")
+        self.reset_btn.clicked.connect(self._show_active)
+        self.reset_btn.hide()
+        left.addWidget(self.reset_btn)
         left.addStretch(1)
         lay.addLayout(left)
+        self.active_skin = None        # (QImage, slim) – so wie er gerade bei Minecraft eingestellt ist
+        self.cape_images = {}          # Umhang-ID → QImage
 
         right = QVBoxLayout()
         head = QLabel(tr("Meine Skins"))
@@ -397,6 +404,7 @@ class SkinDialog(QDialog):
         self.capes = QComboBox()
         self.capes.addItem(tr("Kein Umhang"), "")
         self.capes.setEnabled(False)
+        self.capes.currentIndexChanged.connect(self._cape_changed)
         cape_row.addWidget(self.capes, 1)
         right.addLayout(cape_row)
         self.status = QLabel()
@@ -420,6 +428,8 @@ class SkinDialog(QDialog):
             self.current.setText(tr("Offline-Konten haben keinen echten Skin. Skins kannst du nur mit einem "
                                     "Microsoft-Konto ändern – sammeln geht aber schon."))
             self.apply_btn.setEnabled(False)
+            if self.list.count():
+                self.list.setCurrentRow(0)
         else:
             run_task(self._load_profile, lambda res: _safe(lambda: self._show_profile(res)),
                      lambda err: _safe(lambda: self.current.setText(f"⚠ {err}")))
@@ -429,27 +439,64 @@ class SkinDialog(QDialog):
         prof = skins.profile(self.get_token())
         active = next((s for s in prof.get("skins", []) if s.get("state") == "ACTIVE"), None)
         data = session.get(active["url"], timeout=20).content if active else b""
-        return prof, data
+        capes = {}
+        for cape in prof.get("capes", []):
+            if cape.get("url"):
+                try:
+                    capes[cape["id"]] = session.get(cape["url"], timeout=20).content
+                except Exception:  # noqa: BLE001 – Umhang-Bild ist nur Vorschau
+                    pass
+        return prof, data, capes
 
     def _show_profile(self, result) -> None:
-        prof, data = result
+        prof, data, capes = result
         self.profile = prof
+        self.cape_images = {cid: QImage.fromData(raw) for cid, raw in capes.items()}
         img = QImage.fromData(data)
         active = next((s for s in prof.get("skins", []) if s.get("state") == "ACTIVE"), {})
         if not img.isNull():
-            self._preview(img, active.get("variant", "CLASSIC").upper() == "SLIM")
-        self.current.setText(tr("Aktueller Skin von {name}").format(name=self.account.name))
+            self.active_skin = (img, active.get("variant", "CLASSIC").upper() == "SLIM")
+        self.capes.blockSignals(True)
         self.capes.clear()
         self.capes.addItem(tr("Kein Umhang"), "")
         for cape in prof.get("capes", []):
             self.capes.addItem(cape.get("alias", cape["id"]), cape["id"])
             if cape.get("state") == "ACTIVE":
                 self.capes.setCurrentIndex(self.capes.count() - 1)
+        self.capes.blockSignals(False)
         self.capes.setEnabled(self.capes.count() > 1)
         self._initial_cape = self.capes.currentData()
+        self.list.blockSignals(True)
+        self.list.clearSelection()
+        self.list.setCurrentItem(None)
+        self.list.blockSignals(False)
+        self._show_active()
 
-    def _preview(self, img: QImage, slim: bool) -> None:
-        self.preview.setPixmap(render_skin(img, slim, 12))
+    def _show_active(self) -> None:
+        """Zeigt den Skin, der gerade wirklich bei Minecraft eingestellt ist."""
+        if self.active_skin:
+            self.viewer.set_skin(*self.active_skin)
+        if self.capes.isEnabled():
+            self.capes.blockSignals(True)
+            self.capes.setCurrentIndex(max(self.capes.findData(getattr(self, "_initial_cape", "")), 0))
+            self.capes.blockSignals(False)
+        self.viewer.set_cape(self.cape_images.get(getattr(self, "_initial_cape", "") or ""))
+        self.list.blockSignals(True)
+        self.list.clearSelection()
+        self.list.setCurrentItem(None)
+        self.list.blockSignals(False)
+        self.current.setText(tr("Aktueller Skin von {name}").format(name=self.account.name))
+        self.reset_btn.hide()
+
+    def _mark_preview(self) -> None:
+        if self.account.kind == "microsoft":
+            self.current.setText(tr("👁 Vorschau – erst mit „Anwenden“ wird sie übernommen."))
+            self.reset_btn.show()
+
+    def _cape_changed(self) -> None:
+        self.viewer.set_cape(self.cape_images.get(self.capes.currentData() or ""))
+        if self.capes.currentData() != getattr(self, "_initial_cape", None):
+            self._mark_preview()
 
     # --- Bibliothek -----------------------------------------------------------
     def _fill_library(self) -> None:
@@ -469,7 +516,8 @@ class SkinDialog(QDialog):
             return
         entry = item.data(Qt.ItemDataRole.UserRole)
         img = QImage(str(skins.library_dir() / entry["file"]))
-        self._preview(img, entry.get("variant") == "slim")
+        self.viewer.set_skin(img, entry.get("variant") == "slim")
+        self._mark_preview()
 
     def _add(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, tr("Skin auswählen"), str(Path.home() / "Downloads"),
@@ -519,8 +567,80 @@ class SkinDialog(QDialog):
             return True
 
         def done(_):
-            _safe(lambda: (self.apply_btn.setEnabled(True), self.status.setText(
+            if entry is not None:
+                self.active_skin = (QImage(str(skins.library_dir() / entry["file"])), entry.get("variant") == "slim")
+            self._initial_cape = cape if cape_changed else getattr(self, "_initial_cape", None)
+            _safe(lambda: (self.apply_btn.setEnabled(True), self._show_active(), self.status.setText(
                 tr("✔ Gespeichert! Im Spiel siehst du den neuen Skin nach dem nächsten Start."))))
-            self._initial_cape = cape
 
         run_task(work, done, lambda err: _safe(lambda: (self.apply_btn.setEnabled(True), self.status.setText(f"⚠ {err}"))))
+
+
+# --- BlueMap-Karte -----------------------------------------------------------------
+class MapDialog(QDialog):
+    """Adresse der BlueMap eines Servers eingeben/prüfen und die Karte öffnen."""
+
+    def __init__(self, settings, address: str, name: str, parent=None):
+        super().__init__(parent)
+        self.settings, self.address = settings, address
+        self.setWindowTitle(tr("🗺 Karte – {name}").format(name=name))
+        self.setMinimumWidth(520)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 18)
+        title = QLabel(tr("BlueMap von {name}").format(name=name))
+        title.setObjectName("dialogtitle")
+        lay.addWidget(title)
+        hint = QLabel(tr("Läuft auf dem Server die Mod/das Plugin BlueMap, kannst du dir die 3D-Karte hier ansehen. "
+                         "Meist ist sie unter Port 8100 erreichbar – sonst frag den Server-Betreiber nach der Adresse."))
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        row = QHBoxLayout()
+        self.url = QLineEdit(bluemap.saved_url(settings, address) or bluemap.guess_url(address))
+        self.url.returnPressed.connect(self._open)
+        row.addWidget(self.url, 1)
+        test = QPushButton(tr("Prüfen"))
+        test.clicked.connect(self._check)
+        row.addWidget(test)
+        lay.addLayout(row)
+        self.status = QLabel()
+        self.status.setObjectName("hint")
+        self.status.setWordWrap(True)
+        lay.addWidget(self.status)
+        buttons = QHBoxLayout()
+        browser = QPushButton(tr("Im Browser öffnen"))
+        browser.clicked.connect(lambda: self._open(browser=True))
+        buttons.addWidget(browser)
+        buttons.addStretch(1)
+        close = QPushButton(tr("Schließen"))
+        close.clicked.connect(self.reject)
+        buttons.addWidget(close)
+        self.open_btn = QPushButton(tr("🗺  Karte öffnen"))
+        self.open_btn.setObjectName("primary")
+        self.open_btn.setDefault(True)
+        self.open_btn.clicked.connect(lambda: self._open())
+        buttons.addWidget(self.open_btn)
+        lay.addLayout(buttons)
+        self._check()
+
+    def _check(self) -> None:
+        url = bluemap.normalize(self.url.text())
+        self.status.setText(tr("Prüfe {url} …").format(url=url))
+
+        def done(maps):
+            text = tr("✔ BlueMap gefunden") + (f" – {', '.join(maps)}" if maps else "")
+            _safe(lambda: self.status.setText(text))
+
+        run_task(lambda: bluemap.check(url), done,
+                 lambda err: _safe(lambda: self.status.setText(
+                     tr("⚠ Unter dieser Adresse wurde keine BlueMap gefunden. Prüfe die Adresse oder frag den "
+                        "Server-Betreiber."))))
+
+    def _open(self, browser: bool = False) -> None:
+        url = bluemap.normalize(self.url.text())
+        if not url:
+            return
+        bluemap.save_url(self.settings, self.address, url)
+        if browser or not bluemap.open_window(url):
+            QDesktopServices.openUrl(QUrl(url))
+        self.accept()

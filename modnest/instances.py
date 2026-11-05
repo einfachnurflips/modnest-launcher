@@ -71,6 +71,7 @@ class Mod:
     url: str = ""
     description: str = ""
     pinned: bool = False           # Version bewusst gewählt (nicht automatisch aktualisieren)
+    note: str = ""                 # eigene Notiz, z.B. „nicht updaten, crasht mit X“
 
     @classmethod
     def from_dict(cls, raw: dict) -> "Mod":
@@ -212,6 +213,7 @@ class ContentSet:
             if old.disk_name != item.file:
                 _delete(self.folder / old.disk_name)
             item.category = old.category
+            item.note = item.note or old.note
             if not old.enabled:
                 # Deaktivierten Zustand beibehalten
                 (self.folder / item.file).rename(self.folder / (item.file + DISABLED))
@@ -262,6 +264,7 @@ class Instance:
         self.pack: dict = {}       # Herkunft, falls aus einem fertigen Modpack installiert
         self.profiles: dict = {}   # Mod-Profile: Name → {Art: [aktivierte Dateien]}
         self.group = ""            # Ordner in der Seitenleiste
+        self.account_id = ""       # eigenes Konto für diese Instanz (leer = aktives Konto)
         self.content = {kind: ContentSet(kind, path) for kind in KINDS}
 
     # Kurzformen für die Mods (häufigster Fall)
@@ -297,6 +300,7 @@ class Instance:
         inst.pack = raw.get("pack") or {}
         inst.profiles = raw.get("profiles") or {}
         inst.group = raw.get("group", "")
+        inst.account_id = raw.get("account_id", "")
         # Mods stehen aus Kompatibilitätsgründen direkt auf oberster Ebene
         inst.content["mods"].load_raw(raw.get("categories"), raw.get("mods"))
         for kind in ("resourcepacks", "shaderpacks"):
@@ -326,6 +330,7 @@ class Instance:
             "pack": self.pack,
             "profiles": self.profiles,
             "group": self.group,
+            "account_id": self.account_id,
             "categories": mods["categories"],
             "mods": mods["items"],
             "resourcepacks": self.content["resourcepacks"].to_raw(),

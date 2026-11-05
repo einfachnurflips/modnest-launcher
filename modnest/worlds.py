@@ -179,3 +179,29 @@ def ping(address: str, timeout: float = 4.0) -> ServerStatus:
         motd = motd.replace("§" + code, "")
     return ServerStatus(True, int(players.get("online", 0)), int(players.get("max", 0)), motd,
                         (data.get("version") or {}).get("name", ""), latency, favicon)
+
+
+# --- Server verwalten -------------------------------------------------------------------
+def read_server_entries(instance_path: Path) -> list[dict]:
+    """Rohdaten aus servers.dat (behält Icon & Einstellungen beim Zurückschreiben)."""
+    path = instance_path / "servers.dat"
+    if not path.exists():
+        return []
+    try:
+        data = read_nbt(path)
+    except (OSError, ValueError):
+        return []
+    return [dict(e) for e in data.get("servers", []) if isinstance(e, dict) and e.get("ip")]
+
+
+def write_server_entries(instance_path: Path, entries: list[dict]) -> None:
+    from .nbt import write_servers
+    path = instance_path / "servers.dat"
+    if path.exists():
+        backup = instance_path / "servers.dat_old"
+        try:
+            backup.write_bytes(path.read_bytes())
+        except OSError:
+            pass
+    write_servers(path, entries)
+

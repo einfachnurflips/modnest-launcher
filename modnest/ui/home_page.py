@@ -48,6 +48,8 @@ class HomePage(QWidget):
     packUpdateRequested = Signal(object, object, object)  # Instance, PackInfo, PackVersion
     changelogRequested = Signal(object)            # Update
     launcherUpdateRequested = Signal(object)       # Info zur neuen ModNest-Version
+    shortcutRequested = Signal(object, str, str, str, object)   # Instanz, "server"/"world", Ziel, Name, Bild
+    mapRequested = Signal(str, str)                 # Server-Adresse, Servername
     patchNotesRequested = Signal(object)           # NewsItem
     newInstanceRequested = Signal()
     importRequested = Signal()
@@ -235,6 +237,15 @@ class HomePage(QWidget):
         layout.addLayout(row)
         return icon
 
+    @staticmethod
+    def _small_button(text: str, tip: str, slot) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setObjectName("iconbtn")
+        btn.setToolTip(tip)
+        btn.setFixedSize(30, 30)
+        btn.clicked.connect(slot)
+        return btn
+
     def _build_worlds(self) -> None:
         _clear(self.worlds_list)
         all_worlds = []
@@ -252,7 +263,10 @@ class HomePage(QWidget):
             btn.clicked.connect(lambda _=False, i=inst, f=w.folder: self.joinWorld.emit(i, f))
             sub = f"{inst.name}  ·  {w.game_mode}  ·  {ago(w.last_played)}" if w.game_mode else \
                 f"{inst.name}  ·  {ago(w.last_played)}"
-            self._row(self.worlds_list, pix, w.name, sub, btn)
+            link = self._small_button("🖥", tr("Desktop-Verknüpfung: startet direkt in diese Welt"),
+                                      lambda _=False, i=inst, f=w.folder, n=w.name, p=pix:
+                                      self.shortcutRequested.emit(i, "world", f, n, p))
+            self._row(self.worlds_list, pix, w.name, sub, btn, link)
 
     def _build_servers(self) -> None:
         _clear(self.servers_list)
@@ -277,8 +291,18 @@ class HomePage(QWidget):
             btn.setObjectName("join")
             btn.clicked.connect(lambda _=False, i=inst, a=s.address: self.joinServer.emit(i, a))
             status = _label(tr("prüfe …"), "hint")
+            extras = QWidget()
+            ex = QHBoxLayout(extras)
+            ex.setContentsMargins(0, 0, 0, 0)
+            ex.setSpacing(6)
+            ex.addWidget(status)
+            ex.addWidget(self._small_button("🗺", tr("Karte (BlueMap) öffnen"),
+                                            lambda _=False, a=s.address, n=s.name: self.mapRequested.emit(a, n)))
+            ex.addWidget(self._small_button("🖥", tr("Desktop-Verknüpfung: verbindet direkt mit diesem Server"),
+                                            lambda _=False, i=inst, a=s.address, n=s.name, p=pix:
+                                            self.shortcutRequested.emit(i, "server", a, n, p)))
             self._row(self.servers_list, pix if not pix.isNull() else None, s.name, f"{s.address}  ·  {inst.name}",
-                      btn, status)
+                      btn, extras)
             run_task(lambda a=s.address: worlds.ping(a), lambda st, lbl=status: self._status(req, lbl, st))
 
     def _status(self, req: int, label: QLabel, st) -> None:
