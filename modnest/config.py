@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 APP_NAME = "ModNest"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 USER_AGENT = f"ModNest-Launcher/{APP_VERSION}"
 
 
@@ -37,7 +37,8 @@ class Settings:
     curseforge_api_key: str = ""
     ms_client_id: str = ""          # Azure-App für den Microsoft-Login
     last_instance: str = ""
-    theme: str = "dark"             # dark | light | system
+    theme: str = "dark"             # dark | light | neon | system
+    accent: str = ""                # eigene Akzentfarbe (#rrggbb), leer = Farbe des Designs
     language: str = "de"            # de | en
     backup_dir: str = ""            # leer = %APPDATA%\ModNest\backups
     backup_worlds: bool = True      # Welten beim Beenden des Spiels sichern

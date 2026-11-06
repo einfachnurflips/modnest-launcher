@@ -6,7 +6,7 @@ Für jede Inhaltsart (Mods, Texturepacks, Shader) speichert instance.json die Ka
 import json
 import re
 import shutil
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from .config import instances_dir
@@ -72,6 +72,7 @@ class Mod:
     description: str = ""
     pinned: bool = False           # Version bewusst gewählt (nicht automatisch aktualisieren)
     note: str = ""                 # eigene Notiz, z.B. „nicht updaten, crasht mit X“
+    previous: dict = field(default_factory=dict)   # vorherige Version (für „Update rückgängig“)
 
     @classmethod
     def from_dict(cls, raw: dict) -> "Mod":
@@ -101,6 +102,16 @@ class ContentSet:
         path = self.instance_path / self.info["folder"]
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    @property
+    def previous_folder(self) -> Path:
+        """Hier liegt jeweils die vorherige Version ersetzter Einträge."""
+        return self.instance_path / ".modnest" / "previous" / self.kind
+
+    def _drop_previous(self, item: "Mod") -> None:
+        if item.previous.get("file"):
+            _delete(self.previous_folder / item.previous["file"])
+        item.previous = {}
 
     def load_raw(self, categories: list | None, items: list | None) -> None:
         if categories:
@@ -211,7 +222,22 @@ class ContentSet:
             old = self.find_file(item.file)
         if old is not None:
             if old.disk_name != item.file:
-                _delete(self.folder / old.disk_name)
+                # Alte Version aufheben, damit sich das Update rückgängig machen lässt
+                self._drop_previous(old)
+                src = self.folder / old.disk_name
+                if src.exists() and old.version_id != item.version_id:
+                    self.previous_folder.mkdir(parents=True, exist_ok=True)
+                    target = self.previous_folder / old.file
+                    _delete(target)
+                    shutil.move(str(src), str(target))
+                    snap = asdict(old)
+                    snap.pop("previous", None)
+                    snap["enabled"] = True
+                    item.previous = snap
+                else:
+                    _delete(src)
+            else:
+                item.previous = item.previous or old.previous
             item.category = old.category
             item.note = item.note or old.note
             if not old.enabled:
@@ -226,7 +252,40 @@ class ContentSet:
         for m in list(self.items):
             if m.file == file:
                 move_to_trash(self.folder / m.disk_name)
+                self._drop_previous(m)
                 self.items.remove(m)
+
+    def can_rollback(self, file: str) -> bool:
+        item = self.find_file(file)
+        return bool(item and item.previous.get("file") and (self.previous_folder / item.previous["file"]).exists())
+
+    def rollback(self, file: str) -> "Mod | None":
+        """Stellt die vorherige Version wieder her. Die aktuelle wird ihrerseits aufgehoben (Wechsel hin und zurück
+        möglich). Die wiederhergestellte Version wird festgepinnt, damit sie nicht gleich wieder als Update kommt."""
+        item = self.find_file(file)
+        if not item or not self.can_rollback(file):
+            return None
+        prev = Mod.from_dict(item.previous)
+        stash = self.previous_folder / prev.file
+        current = self.folder / item.disk_name
+        tmp = self.previous_folder / (".swap-" + item.file)
+        _delete(tmp)
+        if current.exists():
+            shutil.move(str(current), str(tmp))
+        target_name = prev.file if item.enabled else prev.file + DISABLED
+        shutil.move(str(stash), str(self.folder / target_name))
+        prev.enabled = item.enabled
+        prev.category = item.category
+        prev.note = item.note
+        prev.pinned = True
+        if tmp.exists():
+            shutil.move(str(tmp), str(self.previous_folder / item.file))
+            snap = asdict(item)
+            snap.pop("previous", None)
+            snap["enabled"] = True
+            prev.previous = snap
+        self.items[self.items.index(item)] = prev
+        return prev
 
     def set_enabled(self, file: str, enabled: bool) -> None:
         for m in self.items:

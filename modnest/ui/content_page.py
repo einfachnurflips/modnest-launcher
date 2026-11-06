@@ -311,6 +311,10 @@ class ContentPage(QWidget):
                     menu.addAction(tr("⚙  Version ändern …"), lambda: self.versionRequested.emit(self.kind, entry))
                 if entry and entry.url:
                     menu.addAction(tr("Projektseite öffnen"), lambda: QDesktopServices.openUrl(QUrl(entry.url)))
+                if entry and self.content.can_rollback(entry.file):
+                    prev = entry.previous.get("version_name") or entry.previous.get("file", "")
+                    menu.addAction(tr("↩  Zurück zu {version}").format(version=prev),
+                                   lambda: self.rollback(entry))
                 if entry:
                     menu.addAction(tr("📝  Notiz bearbeiten …") if entry.note else tr("📝  Notiz hinzufügen …"),
                                    lambda: self.edit_note(entry))
@@ -321,6 +325,22 @@ class ContentPage(QWidget):
         menu.addAction(tr("Unkategorisierte automatisch einsortieren"), self.auto_sort)
         menu.addAction(tr("Neu laden"), self.refresh)
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def rollback(self, entry) -> None:
+        try:
+            restored = self.content.rollback(entry.file)
+        except OSError as exc:
+            QMessageBox.warning(self, tr("Zurücksetzen"), str(exc))
+            return
+        if restored is None:
+            return
+        self.instance.save()
+        self.refresh()
+        QMessageBox.information(self, tr("Zurückgesetzt"), tr(
+            "„{name}“ ist wieder auf {version}.\n\nDie Version ist jetzt festgelegt (📌), damit sie nicht gleich "
+            "wieder als Update angeboten wird. Über „Version ändern“ kannst du das jederzeit aufheben – "
+            "oder hier wieder zur neueren Version wechseln.").format(
+                name=restored.name or restored.file, version=restored.version_name or restored.file))
 
     def edit_note(self, entry) -> None:
         text, ok = QInputDialog.getMultiLineText(

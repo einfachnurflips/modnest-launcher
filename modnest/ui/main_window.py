@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QVBoxLayout, QWidget,
 )
 
-from .. import accounts, backup, compat, crash, discord_rpc, game, importers, installer, modpack, news, packs, shortcuts, updater
+from .. import accounts, backup, compat, crash, discord_rpc, game, importers, installer, modpack, news, packcode, packs, playstats, server_watch, shortcuts, system, updater, worlds
 from ..keys import DEFAULT_KEYS
 from ..config import APP_NAME, APP_VERSION, data_dir
 from ..instances import (
@@ -25,12 +25,12 @@ from . import style
 from .content_page import ContentPage
 from .comfort_dialogs import ImportLaunchersDialog, LogWindow, MapDialog, SkinDialog
 from .instance_list import InstanceList
-from .manage_dialogs import InstanceBackupsDialog, ServersDialog, WorldsDialog
+from .manage_dialogs import InstanceBackupsDialog, ServersDialog, WatchDialog, WorldsDialog
 from .packs_page import ManualDownloadDialog, PackVersionDialog, PacksPage
 from .tools_dialogs import ChangelogDialog, PerfDialog
 from .dialogs import DuplicateDialog, IconPickerDialog, InstanceSettingsDialog, NewInstanceDialog, SettingsDialog
 from .extra_dialogs import CrashDialog, ExportDialog, PatchNotesDialog, WorldBackupsDialog
-from .fmt import duration
+from .fmt import duration, gb
 from .home_page import HomePage
 from .icons import app_icon, instance_icon, logo_pixmap, reset_instance_icon, save_ico, save_instance_icon
 from .login_dialog import MicrosoftLoginDialog
@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
             lambda inst, kind, target, label, pix: self.create_shortcut(
                 inst, target if kind == "server" else "", target if kind == "world" else "", label, pix))
         self.home.mapRequested.connect(self.open_map)
+        self.home.watchRequested.connect(self.watch_server)
         self.packs_page = PacksPage(settings, self.icon_loader)
         self.packs_page.installRequested.connect(self.install_pack)
         self.screens = ScreenshotsPage(settings)
@@ -118,6 +119,7 @@ class MainWindow(QMainWindow):
         run_task(news.launcher_update, self.home.show_launcher_update)
         self._quitting = False
         self._setup_tray()
+        self._setup_server_watch()
 
     # --- Aufbau ------------------------------------------------------------
     def _build_sidebar(self) -> QWidget:
@@ -167,6 +169,7 @@ class MainWindow(QMainWindow):
         imp_menu = QMenu(self)
         imp_menu.addAction(tr("📦  Modpack-Datei importieren (.mrpack / CurseForge-ZIP) …"), self.import_modpack)
         imp_menu.addAction(tr("🔄  Aus anderen Launchern übernehmen …"), self.import_launchers)
+        imp_menu.addAction(tr("🔗  Pack-Code einlösen …"), self.redeem_code)
         imp.clicked.connect(lambda: imp_menu.exec(imp.mapToGlobal(imp.rect().bottomLeft())))
         section.addWidget(imp)
         new = QPushButton("＋")
@@ -184,6 +187,10 @@ class MainWindow(QMainWindow):
         self.instance_list.customContextMenuRequested.connect(self._instance_menu_at)
         sl.addWidget(self.instance_list, 1)
 
+        stats_btn = QPushButton(tr("📊   Spielzeit"))
+        stats_btn.setObjectName("nav")
+        stats_btn.clicked.connect(self.show_stats)
+        sl.addWidget(stats_btn)
         settings_btn = QPushButton(tr("⚙   Einstellungen"))
         settings_btn.setObjectName("nav")
         settings_btn.clicked.connect(self.open_settings)
@@ -217,8 +224,11 @@ class MainWindow(QMainWindow):
         titles.addLayout(self.chips)
         header.addLayout(titles, 1)
         share = QPushButton(tr("📤  Teilen"))
-        share.setToolTip(tr("Als Modpack exportieren (.mrpack / CurseForge)"))
-        share.clicked.connect(self.export_modpack)
+        share.setToolTip(tr("Pack-Code für Freunde oder als Modpack-Datei exportieren"))
+        share_menu = QMenu(self)
+        share_menu.addAction(tr("🔗  Pack-Code kopieren (für Freunde mit ModNest)"), self.share_code)
+        share_menu.addAction(tr("📦  Als Modpack-Datei exportieren (.mrpack / CurseForge) …"), self.export_modpack)
+        share.clicked.connect(lambda: share_menu.exec(share.mapToGlobal(share.rect().bottomLeft())))
         header.addWidget(share)
         folder = QPushButton("📁")
         folder.setObjectName("iconbtn")
@@ -612,6 +622,41 @@ class MainWindow(QMainWindow):
             self.reload_instances(show_home=True)
 
     # --- Modpacks teilen ---------------------------------------------------
+    def share_code(self) -> None:
+        if self.instance:
+            from .packcode_dialogs import ShareCodeDialog
+            ShareCodeDialog(self.instance, self).exec()
+
+    def redeem_code(self) -> None:
+        from .packcode_dialogs import RedeemCodeDialog
+        if self._busy():
+            return
+        dlg = RedeemCodeDialog(self.settings, self)
+        if not dlg.exec() or dlg.data is None:
+            return
+        data, name, settings = dlg.data, dlg.name.text().strip() or dlg.data.get("n") or "Pack", self.settings
+        self.pack_busy = True
+
+        def done(result):
+            inst, notes = result
+            self.pack_busy = False
+            self._done(tr("✔ „{name}“ aus dem Pack-Code installiert.").format(name=inst.name))
+            self.reload_instances(select=str(inst.path))
+            if notes:
+                QMessageBox.information(self, tr("Pack-Code"), tr("Fertig – mit ein paar Hinweisen:") + "\n\n• "
+                                        + "\n• ".join(notes[:15]))
+            if getattr(inst, "import_manual", None):
+                ManualDownloadDialog(inst, inst.import_manual, self).exec()
+                self._refresh_pages()
+
+        def fail(err):
+            self.pack_busy = False
+            self._done(tr("⚠ Installation fehlgeschlagen."))
+            QMessageBox.warning(self, tr("Pack-Code"), err)
+
+        self.on_progress(tr("Installiere {name} …").format(name=name), 0, 0)
+        run_task(lambda progress: packcode.redeem(data, settings, progress, name), done, fail, self.on_progress)
+
     def export_modpack(self) -> None:
         if not self.instance:
             return
@@ -684,7 +729,7 @@ class MainWindow(QMainWindow):
         if not inst:
             return
         running = self.game_process is not None and self.game_instance is inst
-        dlg = ServersDialog(inst, self.instances, running, self)
+        dlg = ServersDialog(inst, self.instances, running, self, self.settings, getattr(self, "tray", None) is not None)
         dlg.joinRequested.connect(lambda i, a: self.play(i, ("server", a)))
         dlg.exec()
         self.home.refresh(self.instances, None) if self.stack.currentWidget() is self.home else None
@@ -976,10 +1021,44 @@ class MainWindow(QMainWindow):
         return None
 
     # --- Einstellungen & Konten --------------------------------------------
+    # --- Server-Benachrichtigungen --------------------------------------------
+    def _setup_server_watch(self) -> None:
+        self.watch_tracker = server_watch.Tracker()
+        self.watch_timer = QTimer(self)
+        self.watch_timer.timeout.connect(self._poll_watches)
+        self.watch_timer.start(server_watch.INTERVAL_S * 1000)
+        QTimer.singleShot(8000, self._poll_watches)
+
+    def _poll_watches(self) -> None:
+        for cfg in list(server_watch.watches(self.settings).values()):
+            run_task(lambda a=cfg["address"]: worlds.ping(a, 6.0),
+                     lambda st, c=cfg: self._watch_result(c, st), lambda err: None)
+
+    def _watch_result(self, cfg, st) -> None:
+        current = server_watch.get(self.settings, cfg["address"])
+        if not current:
+            return
+        for msg in self.watch_tracker.update(current, st):
+            self.notify(msg)
+
+    def notify(self, text: str) -> None:
+        if getattr(self, "tray", None) is not None:
+            self.tray.showMessage("ModNest", text, app_icon(), 8000)
+        self.status(text)
+
+    def watch_server(self, address: str, name: str) -> None:
+        WatchDialog(self.settings, address, name, getattr(self, "tray", None) is not None, self).exec()
+        if self.stack.currentWidget() is self.home:
+            self.home.refresh(self.instances, None)
+
+    def show_stats(self) -> None:
+        from .stats_dialog import StatsDialog
+        StatsDialog(self.instances, self).exec()
+
     def open_settings(self) -> None:
         dlg = SettingsDialog(self.settings, self)
         if dlg.exec():
-            QApplication.instance().setStyleSheet(style.build_style(data_dir(), self.settings.theme))
+            QApplication.instance().setStyleSheet(style.build_style(data_dir(), self.settings.theme, self.settings.accent))
             for page in self.pages.values():
                 page.refresh()
             self._update_header()
@@ -1230,6 +1309,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, tr("Direkt beitreten"), tr(
                 tr("Direkt in eine Welt springen geht erst ab Minecraft 1.20. Das Spiel startet normal.")))
             quick_play = None
+        ram_override = self._check_free_ram(inst)
+        if ram_override is None:
+            return
         store = self.accounts
         client_id = self.settings.ms_client_id.strip()
         self.play_btn.setEnabled(False)
@@ -1240,7 +1322,7 @@ class MainWindow(QMainWindow):
                 progress(tr("Melde {name} bei Microsoft an …").format(name=account.name), 0, 0)
                 accounts.refresh(account, client_id)
             inst.write_resourcepack_order()
-            return game.launch(inst, self.settings, account, progress, quick_play)
+            return game.launch(inst, self.settings, account, progress, quick_play, ram_override)
 
         def done(proc):
             store.save()          # ggf. neuer Refresh-Token
@@ -1271,6 +1353,34 @@ class MainWindow(QMainWindow):
 
         run_task(work, done, fail, self.on_progress)
 
+    def _check_free_ram(self, inst) -> int | None:
+        """Warnt, wenn gerade weniger Arbeitsspeicher frei ist, als Minecraft bekommen soll.
+        Rückgabe: 0 = normal starten, >0 = mit so viel MB starten, None = abbrechen."""
+        ram = inst.ram_mb or self.settings.ram_mb
+        free = system.free_ram_mb()
+        if not free or ram <= free - 1024:
+            return 0
+        lower = max(2048, (free - 1024) // 512 * 512)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("Wenig Arbeitsspeicher frei"))
+        box.setText(tr("Minecraft soll {want} bekommen, gerade sind aber nur {free} frei.").format(
+            want=gb(ram), free=gb(free)))
+        box.setInformativeText(tr("Das kann zu Rucklern oder einem Absturz führen. Schließ am besten Programme wie "
+                                  "Browser oder Discord-Streams – oder starte diesmal mit weniger Speicher."))
+        anyway = box.addButton(tr("Trotzdem starten"), QMessageBox.ButtonRole.AcceptRole)
+        less = None
+        if lower < ram:
+            less = box.addButton(tr("Mit {n} starten").format(n=gb(lower)), QMessageBox.ButtonRole.AcceptRole)
+            box.setDefaultButton(less)
+        box.addButton(tr("Abbrechen"), QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is anyway:
+            return 0
+        if less is not None and box.clickedButton() is less:
+            return lower
+        return None
+
     def _check_game(self) -> None:
         if not self.game_process or self.game_process.poll() is None:
             return
@@ -1281,6 +1391,10 @@ class MainWindow(QMainWindow):
         self._reset_play()
         inst.playtime += int(time.time() - started)
         inst.save()
+        try:
+            playstats.record(inst, started, int(time.time() - started))
+        except OSError:
+            pass
         if inst is self.instance:
             self._update_header()
         self.status(tr("Minecraft wurde beendet – {t} gespielt.").format(t=duration(int(time.time() - started))))
@@ -1343,6 +1457,7 @@ class MainWindow(QMainWindow):
         self.tray.activated.connect(lambda reason: self.handle_command("show")
                                     if reason in (QSystemTrayIcon.ActivationReason.Trigger,
                                                   QSystemTrayIcon.ActivationReason.DoubleClick) else None)
+        self.tray.messageClicked.connect(lambda: self.handle_command("show"))
         self.tray.show()
 
     def _fill_tray_menu(self) -> None:

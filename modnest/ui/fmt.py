@@ -1,6 +1,6 @@
 """Formatierung von Zeiten und Dauern für die Oberfläche."""
 import time
-from ..i18n import tr
+from ..i18n import language, tr
 
 
 
@@ -36,3 +36,9 @@ def downloads_text(n: int) -> str:
     if n >= 1_000:
         return tr("{n} Tsd.").format(n=f"{n / 1_000:.0f}")
     return str(n)
+
+
+def gb(mb: int) -> str:
+    """4096 → „4 GB“, 3584 → „3,5 GB“ (im Englischen „3.5 GB“)."""
+    value = f"{mb / 1024:.1f}".rstrip("0").rstrip(".")
+    return (value if language() == "en" else value.replace(".", ",")) + " GB"

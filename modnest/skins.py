@@ -96,3 +96,92 @@ def download_texture(url: str, target: Path) -> Path:
     resp.raise_for_status()
     target.write_bytes(resp.content)
     return target
+
+
+# --- Erkennen, ob ein Skin schon in der Bibliothek liegt --------------------------
+def pixel_key(img) -> str:
+    """Prüfsumme über die sichtbaren Pixel – unabhängig davon, wie die PNG-Datei kodiert ist."""
+    import hashlib
+    from PySide6.QtGui import QImage
+    img = img.convertToFormat(QImage.Format.Format_ARGB32)
+    h = hashlib.sha1(f"{img.width()}x{img.height()}".encode())
+    for y in range(img.height()):
+        row = bytearray()
+        for x in range(img.width()):
+            argb = img.pixel(x, y)
+            row += (argb if argb >> 24 else 0).to_bytes(4, "little")
+        h.update(row)
+    return h.hexdigest()
+
+
+def find_in_library(img) -> dict | None:
+    """Sucht einen Bibliotheks-Eintrag mit genau diesen Pixeln (merkt sich die Prüfsumme im Index)."""
+    from PySide6.QtGui import QImage
+    key = pixel_key(img)
+    items = library()
+    changed = False
+    found = None
+    for entry in items:
+        if "pixels" not in entry:
+            other = QImage(str(library_dir() / entry["file"]))
+            entry["pixels"] = pixel_key(other) if not other.isNull() else ""
+            changed = True
+        if entry["pixels"] == key and found is None:
+            found = entry
+    if changed:
+        _save_library(items)
+    return found
+
+
+def keep_skin(data: bytes, name: str, variant: str) -> tuple[dict, bool]:
+    """Legt einen Skin (z.B. den aktuell bei Minecraft eingestellten) in der Bibliothek ab, falls er fehlt.
+    Gibt (Eintrag, neu_angelegt) zurück."""
+    import tempfile
+    from PySide6.QtGui import QImage
+    img = QImage.fromData(data)
+    if img.isNull():
+        raise SourceError(tr("Das ist keine gültige Skin-Datei (PNG mit 64×64 oder 64×32 Pixeln)."))
+    existing = find_in_library(img)
+    if existing:
+        return existing, False
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "skin.png"
+        path.write_bytes(data)
+        entry = add_to_library(path, name, variant)
+    items = library()
+    for item in items:
+        if item["file"] == entry["file"]:
+            item["pixels"] = pixel_key(img)
+            entry = item
+    _save_library(items)
+    return entry, True
+
+
+def player_skin(name: str) -> tuple[bytes, str, str]:
+    """Skin eines beliebigen Spielers laden: (PNG-Daten, Variante, richtiger Name)."""
+    import base64
+    resp = session.get(f"https://api.mojang.com/users/profiles/minecraft/{name.strip()}", timeout=15)
+    if resp.status_code in (204, 404):
+        raise SourceError(tr("Spieler „{name}“ gibt es nicht.").format(name=name))
+    data = _check(resp, tr("Spieler suchen"))
+    prof = _check(session.get(f"https://sessionserver.mojang.com/session/minecraft/profile/{data['id']}",
+                              timeout=15), tr("Profil laden"))
+    textures = {}
+    for prop in prof.get("properties", []):
+        if prop.get("name") == "textures":
+            textures = json.loads(base64.b64decode(prop["value"])).get("textures", {})
+    skin = textures.get("SKIN")
+    if not skin:
+        raise SourceError(tr("„{name}“ benutzt den Standard-Skin.").format(name=data.get("name", name)))
+    variant = "slim" if skin.get("metadata", {}).get("model") == "slim" else "classic"
+    resp = session.get(skin["url"], timeout=20)
+    resp.raise_for_status()
+    return resp.content, variant, data.get("name", name)
+
+
+def rename_in_library(entry: dict, name: str) -> None:
+    items = library()
+    for item in items:
+        if item["file"] == entry["file"]:
+            item["name"] = name
+    _save_library(items)

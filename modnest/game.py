@@ -67,8 +67,8 @@ def install(instance: Instance, progress) -> str:
     return version_id
 
 
-def jvm_arguments(instance: Instance, settings) -> list[str]:
-    ram = instance.ram_mb or settings.ram_mb
+def jvm_arguments(instance: Instance, settings, ram_override: int = 0) -> list[str]:
+    ram = ram_override or instance.ram_mb or settings.ram_mb
     args = [f"-Xmx{ram}M", "-Xms512M"]
     if instance.jvm_args.strip():
         args += shlex.split(instance.jvm_args, posix=False)
@@ -86,7 +86,8 @@ def supports_quick_play(mc_version: str) -> bool:
         return False
 
 
-def launch(instance: Instance, settings, account, progress, quick_play: tuple[str, str] | None = None) -> subprocess.Popen:
+def launch(instance: Instance, settings, account, progress, quick_play: tuple[str, str] | None = None,
+           ram_override: int = 0) -> subprocess.Popen:
     """account: ein angemeldetes accounts.Account (Microsoft-Token muss bereits erneuert sein).
 
     quick_play: ("world", Ordnername) oder ("server", "host:port") – startet direkt dort.
@@ -100,7 +101,7 @@ def launch(instance: Instance, settings, account, progress, quick_play: tuple[st
         "launcherName": APP_NAME,
         "launcherVersion": APP_VERSION,
         "gameDirectory": str(instance.path),
-        "jvmArguments": jvm_arguments(instance, settings),
+        "jvmArguments": jvm_arguments(instance, settings, ram_override),
     }
     java = (instance.java_path or settings.java_path).strip()
     if java:

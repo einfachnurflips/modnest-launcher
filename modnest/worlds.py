@@ -4,7 +4,7 @@ import json
 import socket
 import struct
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .nbt import read_nbt
@@ -48,6 +48,7 @@ class ServerStatus:
     version: str = ""
     ping_ms: int = 0
     favicon: bytes | None = None
+    sample: list = field(default_factory=list)   # Namen, die der Server mitschickt (oft nur ein Teil)
 
 
 GAME_MODES = {0: tr("Überleben"), 1: tr("Kreativ"), 2: tr("Abenteuer"), 3: tr("Zuschauer")}
@@ -177,8 +178,16 @@ def ping(address: str, timeout: float = 4.0) -> ServerStatus:
     motd = " ".join(_motd_text(data.get("description")).split())
     for code in "0123456789abcdefklmnor":
         motd = motd.replace("§" + code, "")
+    sample = []
+    for entry in players.get("sample") or []:
+        if not isinstance(entry, dict):
+            continue
+        name, uid = str(entry.get("name", "")), str(entry.get("id", ""))
+        # Viele große Server schicken Werbetext statt echter Namen – nur gültige Spielernamen übernehmen
+        if 3 <= len(name) <= 16 and name.replace("_", "").isalnum() and uid.strip("0-") != "":
+            sample.append(name)
     return ServerStatus(True, int(players.get("online", 0)), int(players.get("max", 0)), motd,
-                        (data.get("version") or {}).get("name", ""), latency, favicon)
+                        (data.get("version") or {}).get("name", ""), latency, favicon, sample)
 
 
 # --- Server verwalten -------------------------------------------------------------------

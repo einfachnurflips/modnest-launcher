@@ -110,7 +110,7 @@ class SetupWizard(QDialog):
 
     def _page_design(self) -> None:
         lay = self._page(tr("Design"), tr("Hell oder dunkel? Du kannst das später jederzeit in den Einstellungen ändern."))
-        self._choice_row(lay, [("dark", tr("🌙  Dunkel")), ("light", tr("☀  Hell")), ("system", tr("🖥  Wie Windows"))],
+        self._choice_row(lay, [("dark", tr("🌙  Dunkel")), ("light", tr("☀  Hell")), ("neon", tr("💜  Neon")), ("system", tr("🖥  Wie Windows"))],
                          self.settings.theme, self._set_theme)
         lay.addStretch(1)
 
@@ -194,7 +194,7 @@ class SetupWizard(QDialog):
 
     def _set_theme(self, theme: str) -> None:
         self.settings.theme = theme
-        QApplication.instance().setStyleSheet(build_style(data_dir(), theme))
+        QApplication.instance().setStyleSheet(build_style(data_dir(), theme, self.settings.accent))
 
     def _microsoft(self) -> None:
         from .login_dialog import MicrosoftLoginDialog

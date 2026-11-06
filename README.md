@@ -15,7 +15,21 @@ Ein Minecraft-Launcher für Windows: **fertige Modpacks** von Modrinth, CurseFor
 - **Download-Hilfe** für Mods, die nur über die Webseite geladen werden dürfen: Datei im Browser laden, ModNest erkennt sie im Downloads-Ordner und baut sie ein
 - **Parallele, geprüfte Downloads** (Prüfsummen, automatische Wiederholung)
 
-**Entdecken** *(neu in 0.4)*
+**Neu in 0.5**
+- **🔗 Pack-Code**: eine Instanz als Text teilen (z.B. in Discord) – Freunde bekommen per „Pack-Code einlösen“ genau dieselben Mods in denselben Versionen
+- **🔔 Server-Benachrichtigungen** pro Server: wenn er online kommt, jemand draufkommt oder bestimmte Freunde online sind
+- **↩ Mod-Update rückgängig**: per Rechtsklick zurück zur vorherigen Version
+- **📊 Spielzeit-Statistik** mit Wochen-Diagramm und Zeit pro Instanz
+- **💜 Neon-Design** und **eigene Akzentfarbe**
+- **👕 Neues Skin-Fenster**: 3D-Vorschau, Skin-Bibliothek (dein aktueller Skin wird automatisch gesichert), Umhänge mit Bild, Skins anderer Spieler per Name laden
+- **RAM-Check** vor dem Start, wenn gerade zu wenig Arbeitsspeicher frei ist
+
+<p align="center">
+  <img src="docs/skin-v5.png" alt="Neues Skin-Fenster im Neon-Design" width="410">
+  <img src="docs/stats.png" alt="Spielzeit-Statistik" width="410">
+</p>
+
+**Entdecken**
 - **Projektseite im Launcher**: Beschreibung mit Bildern, Galerie, Downloads, Kategorien und Links – für Mods, Texturepacks, Shader und Modpacks
 - **Filter nach Kategorie** und **Sortierung** (beliebt, Downloads, zuletzt aktualisiert, neueste)
 
@@ -53,11 +67,11 @@ Ein Minecraft-Launcher für Windows: **fertige Modpacks** von Modrinth, CurseFor
 **Sonstiges**
 - **📜 Spiel-Konsole** mit Live-Log, Fehler farbig, „Log teilen“ über mclo.gs
 - **Absturz-Helfer** mit Ursache und verdächtigen Mods
-- **👕 Skin & Umhang** wechseln (Microsoft-Konto) mit **drehbarer 3D-Vorschau**, eigene Skin-Bibliothek
+- **👕 Skin & Umhang** wechseln (Microsoft-Konto) mit **drehbarer 3D-Vorschau**, Skin-Bibliothek und Umhang-Galerie
 - **Discord-Status** („Spielt …“), Launcher beim Spielen minimieren
 - **Speicherplatz-Übersicht** und Aufräumen, **☕ Java-Verwaltung** (inkl. Download von Eclipse Temurin)
 - **Tray-Symbol** mit Schnellstart der letzten Instanzen, nur ein ModNest gleichzeitig
-- **Einrichtungs-Assistent** beim ersten Start, Hell/Dunkel, **Deutsch/English**
+- **Einrichtungs-Assistent** beim ersten Start, Hell/Dunkel/Neon mit eigener Akzentfarbe, **Deutsch/English**
 - **Offline-Konten** und **Microsoft-Login** (Device-Code, Tokens mit Windows-DPAPI verschlüsselt)
 - Gelöschte Instanzen und Mods landen im **Papierkorb**
 

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
 
-from .. import backup, worlds
+from .. import backup, server_watch, worlds
 from ..i18n import tr
 from ..instances import Instance, _free_path
 from ..sources.base import download, session
@@ -69,14 +69,84 @@ class ServerEditDialog(QDialog):
         form.addRow(buttons)
 
 
+class WatchDialog(QDialog):
+    """Einstellen, wann ModNest zu einem Server Bescheid sagt."""
+
+    def __init__(self, settings, address: str, name: str, tray: bool, parent=None):
+        super().__init__(parent)
+        self.settings, self.address, self.name = settings, address, name
+        cfg = server_watch.get(settings, address)
+        self.setWindowTitle(tr("🔔 Benachrichtigungen – {name}").format(name=name or address))
+        self.setMinimumWidth(520)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 16)
+        lay.setSpacing(10)
+        title = QLabel(tr("🔔 {name}").format(name=name or address))
+        title.setObjectName("dialogtitle")
+        lay.addWidget(title)
+        sub = QLabel(address)
+        sub.setObjectName("hint")
+        lay.addWidget(sub)
+        self.online = QCheckBox(tr("Bescheid sagen, wenn der Server wieder online ist"))
+        self.online.setChecked(bool(cfg.get("online")))
+        lay.addWidget(self.online)
+        self.anyone = QCheckBox(tr("Bescheid sagen, sobald jemand auf dem Server ist"))
+        self.anyone.setChecked(bool(cfg.get("anyone")))
+        lay.addWidget(self.anyone)
+        lay.addSpacing(6)
+        lay.addWidget(QLabel(tr("Bescheid sagen, wenn diese Spieler online kommen:")))
+        self.players = QLineEdit(", ".join(cfg.get("players", [])))
+        self.players.setPlaceholderText(tr("z.B. Kumpel1, Kumpel2"))
+        lay.addWidget(self.players)
+        hint = QLabel(tr("ModNest fragt den Server dafür jede Minute ab – genau wie die Serverliste im Spiel. "
+                         "Niemand sieht etwas davon. Spielernamen klappen nur, wenn der Server sie mitschickt: "
+                         "bei kleinen Servern meist ja, große wie Hypixel zeigen keine echten Namen."))
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        self.check = QLabel(tr("prüfe …"))
+        self.check.setObjectName("hint")
+        self.check.setWordWrap(True)
+        lay.addWidget(self.check)
+        if not tray:
+            warn = QLabel(tr("⚠ Das Symbol im Infobereich ist ausgeschaltet – Meldungen erscheinen dann nur in der "
+                             "Statuszeile. Einschalten unter ⚙ Einstellungen."))
+            warn.setObjectName("warn")
+            warn.setWordWrap(True)
+            lay.addWidget(warn)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        run_task(lambda: worlds.ping(address), lambda st: _safe(lambda: self._show(st)))
+
+    def _show(self, st) -> None:
+        if not st.online:
+            self.check.setText(tr("Gerade offline."))
+        elif st.sample:
+            self.check.setText(tr("Gerade online: {n} Spieler – der Server zeigt Namen an, z.B. {names}.").format(
+                n=st.players, names=", ".join(st.sample[:5])))
+        elif st.players:
+            self.check.setText(tr("Gerade online: {n} Spieler – der Server zeigt aber keine Namen an, "
+                                  "Spieler-Meldungen funktionieren hier nicht.").format(n=st.players))
+        else:
+            self.check.setText(tr("Gerade online, niemand drauf."))
+
+    def _save(self) -> None:
+        server_watch.set_watch(self.settings, self.address, self.name, self.online.isChecked(),
+                               self.anyone.isChecked(), server_watch.parse_players(self.players.text()))
+        self.accept()
+
+
 class ServersDialog(QDialog):
     """Server-Liste einer Instanz bearbeiten – landet direkt in servers.dat (auch im Spiel sichtbar)."""
 
     joinRequested = Signal(object, str)
 
-    def __init__(self, instance, instances, running: bool = False, parent=None):
+    def __init__(self, instance, instances, running: bool = False, parent=None, settings=None, tray: bool = True):
         super().__init__(parent)
         self.instance, self.instances = instance, instances
+        self.settings, self.tray = settings, tray
         self.entries = worlds.read_server_entries(instance.path)
         self.setWindowTitle(tr("🖧 Server – {name}").format(name=instance.name))
         self.resize(760, 480)
@@ -102,6 +172,9 @@ class ServersDialog(QDialog):
                            (tr("🗑 Entfernen"), self._remove), ("↑", lambda: self._move(-1)), ("↓", lambda: self._move(1)),
                            (tr("⧉ In andere Instanz kopieren …"), self._copy)):
             row.addWidget(_button(text, slot))
+        if settings is not None:
+            row.addWidget(_button(tr("🔔 Benachrichtigen …"), self._watch,
+                                  tr("Bescheid sagen, wenn der Server online ist oder Freunde draufkommen")))
         row.addStretch(1)
         row.addWidget(_button(tr("▶ Beitreten"), self._join, primary=True))
         lay.addLayout(row)
@@ -112,7 +185,8 @@ class ServersDialog(QDialog):
         self._req = getattr(self, "_req", 0) + 1
         req = self._req
         for i, e in enumerate(self.entries):
-            item = QTreeWidgetItem([e.get("name") or e["ip"], e["ip"], tr("prüfe …")])
+            bell = "🔔 " if self.settings is not None and server_watch.is_watched(self.settings, e["ip"]) else ""
+            item = QTreeWidgetItem([bell + (e.get("name") or e["ip"]), e["ip"], tr("prüfe …")])
             if e.get("icon"):
                 import base64
                 pix = QPixmap()
@@ -133,6 +207,15 @@ class ServersDialog(QDialog):
             return
         _safe(lambda: item.setText(2, f"● {st.players}/{st.max_players} · {st.ping_ms} ms" if st.online
                                    else tr("● offline")))
+
+    def _watch(self) -> None:
+        i = self._index()
+        if i < 0:
+            QMessageBox.information(self, tr("Server"), tr("Bitte zuerst einen Server auswählen."))
+            return
+        e = self.entries[i]
+        WatchDialog(self.settings, e["ip"], e.get("name") or e["ip"], self.tray, self).exec()
+        self._fill(i)
 
     def _index(self) -> int:
         item = self.tree.currentItem()

@@ -200,10 +200,12 @@ class SettingsDialog(QDialog):
         gen_tab = QWidget()
         form = QFormLayout(gen_tab)
         self.theme = QComboBox()
-        for key, label in (("dark", tr("🌙  Dunkel")), ("light", tr("☀  Hell")), ("system", tr("🖥  Wie Windows"))):
+        for key, label in (("dark", tr("🌙  Dunkel")), ("light", tr("☀  Hell")), ("neon", tr("💜  Neon")), ("system", tr("🖥  Wie Windows"))):
             self.theme.addItem(label, key)
         self.theme.setCurrentIndex(max(self.theme.findData(settings.theme), 0))
         form.addRow(tr("Design"), self.theme)
+        self.accent = AccentPicker(settings.accent)
+        form.addRow(tr("Akzentfarbe"), self.accent)
         self.language = QComboBox()
         for key, label in LANGUAGES.items():
             self.language.addItem(label, key)
@@ -376,6 +378,7 @@ class SettingsDialog(QDialog):
         s = self.settings
         self.language_changed = s.language != self.language.currentData()
         s.theme = self.theme.currentData()
+        s.accent = self.accent.value()
         s.language = self.language.currentData()
         s.backup_dir = self.backup_dir.text().strip()
         s.backup_worlds = self.bak_worlds.isChecked()
@@ -580,3 +583,62 @@ class InstanceSettingsDialog(QDialog):
         inst.account_id = self.account.currentData() or ""
         inst.save()
         self.accept()
+
+
+class AccentPicker(QWidget):
+    """Farbtupfer zur Wahl der Akzentfarbe: Standard, Vorschläge oder eine eigene Farbe."""
+
+    def __init__(self, value: str = "", parent=None):
+        super().__init__(parent)
+        from .style import ACCENTS
+        self._value = value or ""
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self.buttons = []
+        for color, name in [("", "Standard")] + ACCENTS:
+            btn = QPushButton()
+            btn.setCheckable(True)
+            btn.setFixedSize(26, 26)
+            btn.setToolTip(tr(name))
+            btn.setProperty("accent", color)
+            btn.clicked.connect(lambda _=False, c=color: self._set(c))
+            lay.addWidget(btn)
+            self.buttons.append(btn)
+        self.custom = QPushButton(tr("Eigene …"))
+        self.custom.setObjectName("small")
+        self.custom.clicked.connect(self._pick)
+        lay.addWidget(self.custom)
+        lay.addStretch(1)
+        self._refresh()
+
+    def value(self) -> str:
+        return self._value
+
+    def _set(self, color: str) -> None:
+        self._value = color
+        self._refresh()
+
+    def _pick(self) -> None:
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+        color = QColorDialog.getColor(QColor(self._value or "#10b981"), self, tr("Akzentfarbe"))
+        if color.isValid():
+            self._set(color.name())
+
+    def _refresh(self) -> None:
+        from .style import PALETTES, current
+        from .style import color as theme_color
+        known = False
+        for btn in self.buttons:
+            c = btn.property("accent")
+            on = c == self._value
+            known |= on
+            btn.setChecked(on)
+            fill = c or PALETTES[current()]["accent"]
+            label = "" if c else "A"
+            btn.setText(label)
+            btn.setStyleSheet(
+                f"QPushButton {{ background: {fill}; border-radius: 13px; padding: 0; color: white; font-weight: 700;"
+                f" border: {'3px solid ' + theme_color('strong') if on else '1px solid ' + theme_color('border2')}; }}")
+        self.custom.setText(tr("Eigene …") if known else tr("Eigene: {c}").format(c=self._value))

@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from .. import packs, news, updates, worlds
+from .. import packs, news, server_watch, updates, worlds
 from ..instances import LOADERS
 from .fmt import ago, duration
 from .icons import instance_icon, logo_pixmap
@@ -30,6 +30,23 @@ def _label(text: str, name: str = "", wrap: bool = False) -> QLabel:
     return lbl
 
 
+class ElidedLabel(QLabel):
+    """Einzeiliges Label, das bei Platzmangel mit … gekürzt wird statt das Layout zu sprengen."""
+
+    def __init__(self, text: str, name: str = ""):
+        super().__init__(text)
+        self._full = text
+        if name:
+            self.setObjectName(name)
+        self.setToolTip(text)
+        self.setMinimumWidth(20)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def resizeEvent(self, event) -> None:
+        super().setText(self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, self.width()))
+        super().resizeEvent(event)
+
+
 class ClickableFrame(QFrame):
     clicked = Signal()
 
@@ -50,6 +67,7 @@ class HomePage(QWidget):
     launcherUpdateRequested = Signal(object)       # Info zur neuen ModNest-Version
     shortcutRequested = Signal(object, str, str, str, object)   # Instanz, "server"/"world", Ziel, Name, Bild
     mapRequested = Signal(str, str)                 # Server-Adresse, Servername
+    watchRequested = Signal(str, str)               # Server-Adresse, Servername
     patchNotesRequested = Signal(object)           # NewsItem
     newInstanceRequested = Signal()
     importRequested = Signal()
@@ -216,7 +234,7 @@ class HomePage(QWidget):
         self.hero_layout.addWidget(play)
 
     def _row(self, layout, pix: QPixmap | None, title: str, subtitle: str, button: QPushButton | None,
-             extra: QLabel | None = None) -> QLabel:
+             extra: QLabel | None = None, below: QWidget | None = None) -> QLabel:
         row = QHBoxLayout()
         row.setSpacing(10)
         icon = QLabel()
@@ -226,9 +244,11 @@ class HomePage(QWidget):
         row.addWidget(icon)
         col = QVBoxLayout()
         col.setSpacing(0)
-        col.addWidget(_label(title, "cardtitle"))
-        sub = _label(subtitle, "cardtext")
+        col.addWidget(ElidedLabel(title, "cardtitle"))
+        sub = ElidedLabel(subtitle, "cardtext")
         col.addWidget(sub)
+        if below is not None:
+            col.addWidget(below)
         row.addLayout(col, 1)
         if extra is not None:
             row.addWidget(extra)
@@ -295,14 +315,19 @@ class HomePage(QWidget):
             ex = QHBoxLayout(extras)
             ex.setContentsMargins(0, 0, 0, 0)
             ex.setSpacing(6)
-            ex.addWidget(status)
+            watched = server_watch.is_watched(self.settings, s.address)
+            ex.addWidget(self._small_button(
+                "🔔" if watched else "🔕",
+                tr("Benachrichtigungen an – klicken zum Ändern") if watched
+                else tr("Bescheid sagen, wenn der Server online ist oder Freunde draufkommen"),
+                lambda _=False, a=s.address, n=s.name: self.watchRequested.emit(a, n)))
             ex.addWidget(self._small_button("🗺", tr("Karte (BlueMap) öffnen"),
                                             lambda _=False, a=s.address, n=s.name: self.mapRequested.emit(a, n)))
             ex.addWidget(self._small_button("🖥", tr("Desktop-Verknüpfung: verbindet direkt mit diesem Server"),
                                             lambda _=False, i=inst, a=s.address, n=s.name, p=pix:
                                             self.shortcutRequested.emit(i, "server", a, n, p)))
             self._row(self.servers_list, pix if not pix.isNull() else None, s.name, f"{s.address}  ·  {inst.name}",
-                      btn, extras)
+                      btn, extras, below=status)
             run_task(lambda a=s.address: worlds.ping(a), lambda st, lbl=status: self._status(req, lbl, st))
 
     def _status(self, req: int, label: QLabel, st) -> None:

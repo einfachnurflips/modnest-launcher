@@ -73,7 +73,7 @@ def main() -> int:
     app.processEvents()
 
     splash.step(tr("Lade Einstellungen …"), 15, 250)
-    app.setStyleSheet(build_style(data_dir(), settings.theme))
+    app.setStyleSheet(build_style(data_dir(), settings.theme, settings.accent))
 
     next_step = ""
     if first_run:
@@ -82,7 +82,7 @@ def main() -> int:
         wizard = SetupWizard(settings)
         wizard.exec()
         next_step = wizard.next_step
-        app.setStyleSheet(build_style(data_dir(), settings.theme))
+        app.setStyleSheet(build_style(data_dir(), settings.theme, settings.accent))
         if qt_translator.load(f"qtbase_{settings.language}",
                               QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
             app.installTranslator(qt_translator)

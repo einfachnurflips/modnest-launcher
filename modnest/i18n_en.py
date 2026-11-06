@@ -487,3 +487,7 @@ EN.update(MORE)
 from .i18n_en_v4 import V4  # noqa: E402
 
 EN.update(V4)
+
+from .i18n_en_v5 import V5  # noqa: E402
+
+EN.update(V5)

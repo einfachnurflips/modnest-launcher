@@ -1,12 +1,13 @@
 """Komfort-Dialoge: Import aus anderen Launchern, Speicherplatz, Spiel-Konsole, Skins."""
 import html
 import re
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QRect, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QFont, QGuiApplication, QIcon, QImage, QPainter, QPixmap, QTextCursor
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QImage, QPainter, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView, QInputDialog,
+    QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
 from .. import bluemap, importers, skins, storage
 from ..i18n import tr
 from ..sources.base import session
+from . import style
 from .skin3d import SkinViewer
 from .workers import run_task
 
@@ -340,25 +342,84 @@ def render_skin(img: QImage, slim: bool, scale: int = 8) -> QPixmap:
     return pix
 
 
+def render_cape(img: QImage, scale: int = 6) -> QPixmap:
+    """Vorderseite eines Umhangs (10×16 Pixel der Textur)."""
+    unit = max(img.width() // 64, 1)
+    front = img.copy(1 * unit, 1 * unit, 10 * unit, 16 * unit)
+    pix = QPixmap(10 * scale, 16 * scale)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+    p.drawImage(QRect(0, 0, 10 * scale, 16 * scale), front)
+    p.end()
+    return pix
+
+
+def _no_cape_icon(scale: int = 6) -> QPixmap:
+    pix = QPixmap(10 * scale, 16 * scale)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = p.pen()
+    pen.setColor(QColor(style.color("faint")))
+    pen.setWidth(2)
+    pen.setStyle(Qt.PenStyle.DashLine)
+    p.setPen(pen)
+    p.drawRoundedRect(QRect(3, 3, 10 * scale - 6, 16 * scale - 6), 6, 6)
+    font = QFont()
+    font.setPointSize(18)
+    p.setFont(font)
+    p.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, "∅")
+    p.end()
+    return pix
+
+
+def _column(title: str) -> tuple[QFrame, QVBoxLayout]:
+    frame = QFrame()
+    frame.setObjectName("card")
+    lay = QVBoxLayout(frame)
+    lay.setContentsMargins(16, 14, 16, 14)
+    lay.setSpacing(10)
+    head = QLabel(title)
+    head.setObjectName("h2")
+    lay.addWidget(head)
+    return frame, lay
+
+
 class SkinDialog(QDialog):
-    """Skin wechseln: Bibliothek eigener Skins, Hochladen zu Minecraft, Umhang wählen."""
+    """Skin wechseln: links die 3D-Vorschau, in der Mitte die eigene Skin-Bibliothek, rechts die Umhänge.
+
+    Der Skin, der gerade bei Minecraft eingestellt ist, wird automatisch in die Bibliothek übernommen –
+    so geht er beim Wechseln nie verloren und bleibt immer auswählbar."""
+
+    ACTIVE_MARK = "✔ "
+    KEY = Qt.ItemDataRole.UserRole + 1
 
     def __init__(self, account, get_token, parent=None):
         super().__init__(parent)
         self.account = account
         self.get_token = get_token          # fn() → frischer Minecraft-Token (im Worker-Thread)
         self.profile = {}
+        self.active_skin = None             # (QImage, slim) – so wie er gerade bei Minecraft eingestellt ist
+        self.active_file = ""               # Bibliotheks-Datei, die dem aktiven Skin entspricht
+        self.cape_images = {}               # Umhang-ID → QImage
+        self._initial_cape = ""
+        self.microsoft = account.kind == "microsoft"
         self.setWindowTitle(tr("👕 Skin – {name}").format(name=account.name))
-        self.resize(820, 560)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 18)
-        lay.setSpacing(18)
+        self.resize(1180, 640)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 18, 20, 16)
+        outer.setSpacing(14)
+        cols = QHBoxLayout()
+        cols.setSpacing(14)
+        outer.addLayout(cols, 1)
 
-        left = QVBoxLayout()
+        # --- Links: 3D-Vorschau ---------------------------------------------------
+        left_frame, left = _column(tr("Vorschau"))
         self.viewer = SkinViewer()
         self.viewer.setFixedSize(260, 400)
         self.viewer.setToolTip(tr("Ziehen zum Drehen, Doppelklick setzt die Ansicht zurück"))
-        left.addWidget(self.viewer)
+        left.addWidget(self.viewer, 0, Qt.AlignmentFlag.AlignHCenter)
         self.current = QLabel(tr("Lade aktuellen Skin …"))
         self.current.setObjectName("hint")
         self.current.setWordWrap(True)
@@ -370,49 +431,68 @@ class SkinDialog(QDialog):
         self.reset_btn.hide()
         left.addWidget(self.reset_btn)
         left.addStretch(1)
-        lay.addLayout(left)
-        self.active_skin = None        # (QImage, slim) – so wie er gerade bei Minecraft eingestellt ist
-        self.cape_images = {}          # Umhang-ID → QImage
+        cols.addWidget(left_frame)
 
-        right = QVBoxLayout()
-        head = QLabel(tr("Meine Skins"))
-        head.setObjectName("dialogtitle")
-        right.addWidget(head)
+        # --- Mitte: Meine Skins ---------------------------------------------------
+        mid_frame, mid = _column(tr("Meine Skins"))
         self.list = QListWidget()
         self.list.setViewMode(QListWidget.ViewMode.IconMode)
         self.list.setIconSize(QSize(64, 128))
-        self.list.setGridSize(QSize(110, 170))
+        self.list.setGridSize(QSize(118, 176))
         self.list.setMovement(QListWidget.Movement.Static)
         self.list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.list.setWordWrap(True)
         self.list.currentItemChanged.connect(self._selected)
-        right.addWidget(self.list, 1)
+        self.list.itemDoubleClicked.connect(lambda _i: self._rename())
+        mid.addWidget(self.list, 1)
         row = QHBoxLayout()
-        add = QPushButton(tr("＋ Skin hinzufügen …"))
+        add = QPushButton(tr("＋ Datei …"))
+        add.setToolTip(tr("Skin-PNG von deinem PC hinzufügen"))
         add.clicked.connect(self._add)
         row.addWidget(add)
-        self.remove_btn = QPushButton(tr("Entfernen"))
+        player = QPushButton(tr("👤 Von Spieler …"))
+        player.setToolTip(tr("Den Skin eines beliebigen Spielers über seinen Namen laden"))
+        player.clicked.connect(self._from_player)
+        row.addWidget(player)
+        self.rename_btn = QPushButton(tr("✏ Umbenennen"))
+        self.rename_btn.clicked.connect(self._rename)
+        row.addWidget(self.rename_btn)
+        self.remove_btn = QPushButton(tr("🗑 Entfernen"))
         self.remove_btn.clicked.connect(self._remove)
         row.addWidget(self.remove_btn)
         row.addStretch(1)
-        get = QPushButton(tr("Skins finden"))
+        get = QPushButton(tr("🌐 Skins finden"))
         get.setToolTip("namemc.com")
         get.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://namemc.com/minecraft-skins")))
         row.addWidget(get)
-        right.addLayout(row)
-        cape_row = QHBoxLayout()
-        cape_row.addWidget(QLabel(tr("Umhang:")))
-        self.capes = QComboBox()
-        self.capes.addItem(tr("Kein Umhang"), "")
-        self.capes.setEnabled(False)
-        self.capes.currentIndexChanged.connect(self._cape_changed)
-        cape_row.addWidget(self.capes, 1)
-        right.addLayout(cape_row)
+        mid.addLayout(row)
+        cols.addWidget(mid_frame, 1)
+
+        # --- Rechts: Umhänge ------------------------------------------------------
+        right_frame, right = _column(tr("Umhänge"))
+        right_frame.setFixedWidth(272)
+        self.capes = QListWidget()
+        self.capes.setViewMode(QListWidget.ViewMode.IconMode)
+        self.capes.setIconSize(QSize(60, 96))
+        self.capes.setGridSize(QSize(110, 140))
+        self.capes.setMovement(QListWidget.Movement.Static)
+        self.capes.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.capes.setWordWrap(True)
+        self.capes.currentItemChanged.connect(self._cape_changed)
+        right.addWidget(self.capes, 1)
+        self.cape_hint = QLabel(tr("Lade Umhänge …") if self.microsoft
+                                else tr("Umhänge gibt es nur mit einem Microsoft-Konto."))
+        self.cape_hint.setObjectName("hint")
+        self.cape_hint.setWordWrap(True)
+        right.addWidget(self.cape_hint)
+        cols.addWidget(right_frame)
+
+        # --- Unten ----------------------------------------------------------------
+        bottom = QHBoxLayout()
         self.status = QLabel()
         self.status.setObjectName("hint")
         self.status.setWordWrap(True)
-        right.addWidget(self.status)
-        bottom = QHBoxLayout()
-        bottom.addStretch(1)
+        bottom.addWidget(self.status, 1)
         close = QPushButton(tr("Schließen"))
         close.clicked.connect(self.reject)
         bottom.addWidget(close)
@@ -420,14 +500,14 @@ class SkinDialog(QDialog):
         self.apply_btn.setObjectName("primary")
         self.apply_btn.clicked.connect(self._apply)
         bottom.addWidget(self.apply_btn)
-        right.addLayout(bottom)
-        lay.addLayout(right, 1)
+        outer.addLayout(bottom)
 
         self._fill_library()
-        if account.kind != "microsoft":
+        if not self.microsoft:
             self.current.setText(tr("Offline-Konten haben keinen echten Skin. Skins kannst du nur mit einem "
                                     "Microsoft-Konto ändern – sammeln geht aber schon."))
             self.apply_btn.setEnabled(False)
+            self.capes.setEnabled(False)
             if self.list.count():
                 self.list.setCurrentRow(0)
         else:
@@ -452,64 +532,125 @@ class SkinDialog(QDialog):
         prof, data, capes = result
         self.profile = prof
         self.cape_images = {cid: QImage.fromData(raw) for cid, raw in capes.items()}
-        img = QImage.fromData(data)
         active = next((s for s in prof.get("skins", []) if s.get("state") == "ACTIVE"), {})
+        img = QImage.fromData(data)
         if not img.isNull():
-            self.active_skin = (img, active.get("variant", "CLASSIC").upper() == "SLIM")
-        self.capes.blockSignals(True)
-        self.capes.clear()
-        self.capes.addItem(tr("Kein Umhang"), "")
-        for cape in prof.get("capes", []):
-            self.capes.addItem(cape.get("alias", cape["id"]), cape["id"])
-            if cape.get("state") == "ACTIVE":
-                self.capes.setCurrentIndex(self.capes.count() - 1)
-        self.capes.blockSignals(False)
-        self.capes.setEnabled(self.capes.count() > 1)
-        self._initial_cape = self.capes.currentData()
-        self.list.blockSignals(True)
-        self.list.clearSelection()
-        self.list.setCurrentItem(None)
-        self.list.blockSignals(False)
+            variant = "slim" if active.get("variant", "CLASSIC").upper() == "SLIM" else "classic"
+            self.active_skin = (img, variant == "slim")
+            # Aktuellen Skin sichern, damit er beim Wechseln nicht verloren geht
+            try:
+                entry, added = skins.keep_skin(
+                    data, tr("{name} – gesichert {date}").format(
+                        name=self.account.name, date=datetime.now().strftime("%d.%m.%Y")), variant)
+                self.active_file = entry["file"]
+                if added:
+                    self.status.setText(tr("✔ Dein aktueller Skin wurde in „Meine Skins“ gesichert – "
+                                           "du kannst jederzeit zu ihm zurück."))
+            except Exception:  # noqa: BLE001 – Sichern ist ein Extra, die Anzeige soll trotzdem gehen
+                pass
+        self._initial_cape = next((c["id"] for c in prof.get("capes", []) if c.get("state") == "ACTIVE"), "")
+        self._fill_capes(prof.get("capes", []))
+        self._fill_library()
         self._show_active()
 
     def _show_active(self) -> None:
-        """Zeigt den Skin, der gerade wirklich bei Minecraft eingestellt ist."""
+        """Zeigt den Skin und Umhang, die gerade wirklich bei Minecraft eingestellt sind."""
         if self.active_skin:
             self.viewer.set_skin(*self.active_skin)
-        if self.capes.isEnabled():
-            self.capes.blockSignals(True)
-            self.capes.setCurrentIndex(max(self.capes.findData(getattr(self, "_initial_cape", "")), 0))
-            self.capes.blockSignals(False)
-        self.viewer.set_cape(self.cape_images.get(getattr(self, "_initial_cape", "") or ""))
-        self.list.blockSignals(True)
-        self.list.clearSelection()
-        self.list.setCurrentItem(None)
-        self.list.blockSignals(False)
+        self.viewer.set_cape(self.cape_images.get(self._initial_cape or ""))
+        self._select(self.list, self.active_file)
+        self._select(self.capes, self._initial_cape)
         self.current.setText(tr("Aktueller Skin von {name}").format(name=self.account.name))
         self.reset_btn.hide()
 
-    def _mark_preview(self) -> None:
-        if self.account.kind == "microsoft":
+    def _select(self, widget: QListWidget, key: str) -> None:
+        widget.blockSignals(True)
+        widget.clearSelection()
+        widget.setCurrentItem(None)
+        for i in range(widget.count()):
+            if widget.item(i).data(self.KEY) == key:
+                widget.setCurrentRow(i)
+                break
+        widget.blockSignals(False)
+
+    def _selected_skin(self) -> dict | None:
+        item = self.list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _selected_cape(self) -> str:
+        item = self.capes.currentItem()
+        return item.data(self.KEY) if item else self._initial_cape
+
+    def _update_preview_state(self) -> None:
+        if not self.microsoft:
+            return
+        entry = self._selected_skin()
+        skin_changed = entry is not None and entry["file"] != self.active_file
+        if skin_changed or self._selected_cape() != self._initial_cape:
             self.current.setText(tr("👁 Vorschau – erst mit „Anwenden“ wird sie übernommen."))
             self.reset_btn.show()
+        else:
+            self.current.setText(tr("Aktueller Skin von {name}").format(name=self.account.name))
+            self.reset_btn.hide()
 
-    def _cape_changed(self) -> None:
-        self.viewer.set_cape(self.cape_images.get(self.capes.currentData() or ""))
-        if self.capes.currentData() != getattr(self, "_initial_cape", None):
-            self._mark_preview()
+    # --- Umhänge --------------------------------------------------------------
+    def _fill_capes(self, capes: list) -> None:
+        self.capes.blockSignals(True)
+        self.capes.clear()
+        none = QListWidgetItem(QIcon(_no_cape_icon()), tr("Kein Umhang"))
+        none.setData(self.KEY, "")
+        self.capes.addItem(none)
+        for cape in capes:
+            img = self.cape_images.get(cape["id"])
+            icon = QIcon(render_cape(img)) if img is not None and not img.isNull() else QIcon(_no_cape_icon())
+            name = cape.get("alias") or cape["id"]
+            active = cape.get("state") == "ACTIVE"
+            item = QListWidgetItem(icon, (self.ACTIVE_MARK if active else "") + name)
+            item.setData(self.KEY, cape["id"])
+            item.setToolTip(tr("Gerade eingestellt") if active else name)
+            if active:
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+            self.capes.addItem(item)
+        if not self._initial_cape:
+            none.setText(self.ACTIVE_MARK + none.text())
+        self.capes.blockSignals(False)
+        self.cape_hint.setText(tr("{n} Umhang/Umhänge freigeschaltet.").format(n=len(capes)) if capes
+                               else tr("Dieses Konto hat noch keine Umhänge."))
+
+    def _cape_changed(self, item, _prev=None) -> None:
+        if item is None:
+            return
+        self.viewer.set_cape(self.cape_images.get(item.data(self.KEY) or ""))
+        self._update_preview_state()
 
     # --- Bibliothek -----------------------------------------------------------
     def _fill_library(self) -> None:
+        keep = self._selected_skin()
+        self.list.blockSignals(True)
         self.list.clear()
         for entry in skins.library():
             img = QImage(str(skins.library_dir() / entry["file"]))
             if img.isNull():
                 continue
             pix = render_skin(img, entry.get("variant") == "slim", 4)
-            item = QListWidgetItem(QIcon(pix), entry["name"])
+            active = entry["file"] == self.active_file
+            item = QListWidgetItem(QIcon(pix), (self.ACTIVE_MARK if active else "") + entry["name"])
             item.setData(Qt.ItemDataRole.UserRole, entry)
+            item.setData(self.KEY, entry["file"])
+            if active:
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+                item.setToolTip(tr("Gerade bei Minecraft eingestellt"))
             self.list.addItem(item)
-        self.remove_btn.setEnabled(self.list.count() > 0)
+        self.list.blockSignals(False)
+        if keep:
+            self._select(self.list, keep["file"])
+        has = self.list.count() > 0
+        self.remove_btn.setEnabled(has)
+        self.rename_btn.setEnabled(has)
 
     def _selected(self, item, _prev=None) -> None:
         if item is None:
@@ -517,7 +658,12 @@ class SkinDialog(QDialog):
         entry = item.data(Qt.ItemDataRole.UserRole)
         img = QImage(str(skins.library_dir() / entry["file"]))
         self.viewer.set_skin(img, entry.get("variant") == "slim")
-        self._mark_preview()
+        self._update_preview_state()
+
+    def _show_entry(self, entry: dict) -> None:
+        self._fill_library()
+        self._select(self.list, entry["file"])
+        self._selected(self.list.currentItem())
 
     def _add(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, tr("Skin auswählen"), str(Path.home() / "Downloads"),
@@ -532,28 +678,63 @@ class SkinDialog(QDialog):
         if not ok:
             return
         try:
-            skins.add_to_library(Path(path), name.strip() or Path(path).stem,
-                                 "slim" if variant.startswith(tr("Schmal")) else "classic")
+            entry = skins.add_to_library(Path(path), name.strip() or Path(path).stem,
+                                         "slim" if variant.startswith(tr("Schmal")) else "classic")
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, tr("Skin"), str(exc))
             return
-        self._fill_library()
-        self.list.setCurrentRow(self.list.count() - 1)
+        self._show_entry(entry)
+
+    def _from_player(self) -> None:
+        name, ok = QInputDialog.getText(self, tr("Skin von Spieler"), tr("Name des Spielers:"))
+        name = name.strip()
+        if not ok or not name:
+            return
+        self.status.setText(tr("Lade Skin von {name} …").format(name=name))
+
+        def done(res):
+            data, variant, real = res
+            try:
+                entry, added = skins.keep_skin(data, real, variant)
+            except Exception as exc:  # noqa: BLE001
+                self.status.setText(f"⚠ {exc}")
+                return
+            self._show_entry(entry)
+            self.status.setText(tr("✔ Skin von {name} hinzugefügt.").format(name=real) if added
+                                else tr("Diesen Skin hast du schon: „{name}“.").format(name=entry["name"]))
+
+        run_task(lambda: skins.player_skin(name), lambda res: _safe(lambda: done(res)),
+                 lambda err: _safe(lambda: self.status.setText(f"⚠ {err}")))
+
+    def _rename(self) -> None:
+        entry = self._selected_skin()
+        if not entry:
+            return
+        name, ok = QInputDialog.getText(self, tr("Skin umbenennen"), tr("Name:"), text=entry["name"])
+        if ok and name.strip():
+            skins.rename_in_library(entry, name.strip())
+            self._fill_library()
 
     def _remove(self) -> None:
-        item = self.list.currentItem()
-        if item and QMessageBox.question(self, tr("Skin"), tr("„{name}“ aus der Bibliothek entfernen?").format(
-                name=item.text())) == QMessageBox.StandardButton.Yes:
-            skins.remove_from_library(item.data(Qt.ItemDataRole.UserRole))
+        entry = self._selected_skin()
+        if not entry:
+            return
+        text = tr("„{name}“ aus der Bibliothek entfernen?").format(name=entry["name"])
+        if entry["file"] == self.active_file:
+            text += "\n\n" + tr("Das ist dein aktueller Skin. Bei Minecraft bleibt er eingestellt, "
+                                "beim nächsten Öffnen wird er wieder gesichert.")
+        if QMessageBox.question(self, tr("Skin"), text) == QMessageBox.StandardButton.Yes:
+            skins.remove_from_library(entry)
             self._fill_library()
 
     def _apply(self) -> None:
-        item = self.list.currentItem()
-        entry = item.data(Qt.ItemDataRole.UserRole) if item else None
-        cape = self.capes.currentData() if self.capes.isEnabled() else None
-        cape_changed = self.capes.isEnabled() and cape != getattr(self, "_initial_cape", None)
+        entry = self._selected_skin()
+        if entry is not None and entry["file"] == self.active_file:
+            entry = None
+        cape = self._selected_cape()
+        cape_changed = self.capes.isEnabled() and self.capes.count() > 0 and cape != self._initial_cape
         if entry is None and not cape_changed:
-            self.status.setText(tr("Wähle zuerst einen Skin aus deiner Bibliothek."))
+            self.status.setText(tr("Das ist schon so eingestellt – wähle einen anderen Skin oder Umhang."))
             return
         self.apply_btn.setEnabled(False)
         self.status.setText(tr("Übertrage zu Minecraft …"))
@@ -569,11 +750,19 @@ class SkinDialog(QDialog):
         def done(_):
             if entry is not None:
                 self.active_skin = (QImage(str(skins.library_dir() / entry["file"])), entry.get("variant") == "slim")
-            self._initial_cape = cape if cape_changed else getattr(self, "_initial_cape", None)
-            _safe(lambda: (self.apply_btn.setEnabled(True), self._show_active(), self.status.setText(
-                tr("✔ Gespeichert! Im Spiel siehst du den neuen Skin nach dem nächsten Start."))))
+                self.active_file = entry["file"]
+            if cape_changed:
+                self._initial_cape = cape
+                for c in self.profile.get("capes", []):
+                    c["state"] = "ACTIVE" if c["id"] == cape else "INACTIVE"
+                self._fill_capes(self.profile.get("capes", []))
+            self._fill_library()
+            self.apply_btn.setEnabled(True)
+            self._show_active()
+            self.status.setText(tr("✔ Gespeichert! Im Spiel siehst du den neuen Skin nach dem nächsten Start."))
 
-        run_task(work, done, lambda err: _safe(lambda: (self.apply_btn.setEnabled(True), self.status.setText(f"⚠ {err}"))))
+        run_task(work, lambda r: _safe(lambda: done(r)),
+                 lambda err: _safe(lambda: (self.apply_btn.setEnabled(True), self.status.setText(f"⚠ {err}"))))
 
 
 # --- BlueMap-Karte -----------------------------------------------------------------

@@ -28,6 +28,16 @@ def total_ram_mb() -> int:
     return 8192
 
 
+def free_ram_mb() -> int:
+    """Gerade freier Arbeitsspeicher in MB (0 = unbekannt)."""
+    if sys.platform == "win32":
+        status = _MemoryStatus()
+        status.dwLength = ctypes.sizeof(status)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return int(status.ullAvailPhys // (1024 * 1024))
+    return 0
+
+
 def ram_rating(ram_mb: int, total_mb: int) -> tuple[str, str]:
     """(Farbe, Hinweis) für eine RAM-Zuweisung."""
     if ram_mb < 2048:
