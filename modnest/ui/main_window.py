@@ -25,7 +25,7 @@ from . import style
 from .content_page import ContentPage
 from .comfort_dialogs import ImportLaunchersDialog, LogWindow, MapDialog, SkinDialog
 from .instance_list import InstanceList
-from .manage_dialogs import InstanceBackupsDialog, ServersDialog, WatchDialog, WorldsDialog
+from .manage_dialogs import InstanceBackupsDialog, ServersDialog, ShortcutTargetDialog, WatchDialog, WorldsDialog
 from .packs_page import ManualDownloadDialog, PackVersionDialog, PacksPage
 from .tools_dialogs import ChangelogDialog, PerfDialog
 from .dialogs import DuplicateDialog, IconPickerDialog, InstanceSettingsDialog, NewInstanceDialog, SettingsDialog
@@ -827,6 +827,11 @@ class MainWindow(QMainWindow):
         inst = inst or self.instance
         if not inst:
             return
+        if server and len(self.instances) > 1:
+            dlg = ShortcutTargetDialog(self.instances, inst, label or server, server, self)
+            if not dlg.exec() or dlg.instance is None:
+                return
+            inst, label = dlg.instance, dlg.label.text().strip() or label
         key = re.sub(r"[^A-Za-z0-9_-]", "_", f"{inst.path.name}-{server or world}")
         ico = shortcuts.icon_cache_dir() / f"{key}.ico"
         try:

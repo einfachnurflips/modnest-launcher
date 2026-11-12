@@ -147,4 +147,11 @@ V5 = {
     "Suche Modpack {name} …": "Looking up modpack {name} …",
     "{title}: genaue Version nicht mehr verfügbar – neueste passende installiert.":
         "{title}: exact version no longer available – installed the latest matching one.",
+    # Server-Verknüpfung mit Instanz-Auswahl
+    "🖥 Verknüpfung – {name}": "🖥 Shortcut – {name}",
+    "🖥 Verknüpfung zu „{name}“": "🖥 Shortcut to “{name}”",
+    "Mit welchem Modpack bzw. welcher Instanz soll beigetreten werden?":
+        "Which modpack / instance should be used to join?",
+    "Name auf dem Desktop": "Name on the desktop",
+    "Verknüpfung erstellen": "Create shortcut",
 }

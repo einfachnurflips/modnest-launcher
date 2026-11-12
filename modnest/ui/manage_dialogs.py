@@ -69,6 +69,66 @@ class ServerEditDialog(QDialog):
         form.addRow(buttons)
 
 
+class ShortcutTargetDialog(QDialog):
+    """Vor dem Anlegen einer Server-Verknüpfung: mit welcher Instanz (welchem Modpack) soll beigetreten werden?"""
+
+    def __init__(self, instances, default, server_name: str, address: str, parent=None):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QListWidget, QListWidgetItem
+        from ..instances import LOADERS
+        from .icons import instance_icon
+        self.server_name = server_name
+        self.setWindowTitle(tr("🖥 Verknüpfung – {name}").format(name=server_name))
+        self.setMinimumSize(500, 460)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 16)
+        lay.setSpacing(10)
+        title = QLabel(tr("🖥 Verknüpfung zu „{name}“").format(name=server_name))
+        title.setObjectName("dialogtitle")
+        lay.addWidget(title)
+        sub = QLabel(address)
+        sub.setObjectName("hint")
+        lay.addWidget(sub)
+        lay.addWidget(QLabel(tr("Mit welchem Modpack bzw. welcher Instanz soll beigetreten werden?")))
+        self.list = QListWidget()
+        self.list.setIconSize(QSize(32, 32))
+        for inst in instances:
+            item = QListWidgetItem(instance_icon(inst, 32), f"{inst.name}\n{LOADERS.get(inst.loader, inst.loader)} "
+                                                            f"{inst.mc_version}")
+            item.setData(Qt.ItemDataRole.UserRole, inst)
+            self.list.addItem(item)
+            if inst is default:
+                self.list.setCurrentItem(item)
+        if self.list.currentItem() is None and self.list.count():
+            self.list.setCurrentRow(0)
+        self.list.itemDoubleClicked.connect(lambda _i: self.accept())
+        lay.addWidget(self.list, 1)
+        form = QFormLayout()
+        self.label = QLineEdit()
+        self._auto_label = True
+        self.label.textEdited.connect(lambda _t: setattr(self, "_auto_label", False))
+        form.addRow(tr("Name auf dem Desktop"), self.label)
+        lay.addLayout(form)
+        self.list.currentItemChanged.connect(lambda *_: self._update_label())
+        self._update_label()
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        ok.setText(tr("Verknüpfung erstellen"))
+        ok.setObjectName("primary")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+
+    @property
+    def instance(self):
+        item = self.list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _update_label(self) -> None:
+        if self._auto_label and self.instance is not None:
+            self.label.setText(f"{self.server_name} ({self.instance.name})")
+
+
 class WatchDialog(QDialog):
     """Einstellen, wann ModNest zu einem Server Bescheid sagt."""
 

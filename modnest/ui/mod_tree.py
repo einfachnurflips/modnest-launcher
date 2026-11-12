@@ -1,7 +1,7 @@
 """Baumansicht der installierten Mods: Kategorien als Gruppen, alles per Drag & Drop sortierbar."""
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QItemSelectionModel, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTreeWidget, QTreeWidgetItem
+from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTreeWidget, QTreeWidgetItem, QTreeWidgetItemIterator
 
 from ..instances import ContentSet
 from . import style
@@ -62,6 +62,11 @@ class ModTree(QTreeWidget):
         expanded = {self.topLevelItem(i).data(0, KEY_ROLE) for i in range(self.topLevelItemCount())
                     if self.topLevelItem(i).isExpanded()}
         first_fill = self.topLevelItemCount() == 0
+        # Scroll-Position und Auswahl merken, damit die Liste beim Neuaufbau nicht nach oben springt
+        scroll = self.verticalScrollBar().value()
+        selected = {(self.kind(i), self.key(i)) for i in self.selectedItems()}
+        current = self.currentItem()
+        current_key = (self.kind(current), self.key(current)) if current is not None else None
         self._filling = True
         self.clear()
         for cat in content.categories:
@@ -72,8 +77,22 @@ class ModTree(QTreeWidget):
                     cat_item.addChild(self._make_mod(mod))
             cat_item.setExpanded(first_fill or cat["name"] in expanded)
             cat_item.setFirstColumnSpanned(True)
+        if selected or current_key:
+            it = QTreeWidgetItemIterator(self)
+            while it.value():
+                item = it.value()
+                key = (self.kind(item), self.key(item))
+                if key == current_key:
+                    self.setCurrentItem(item, 0, QItemSelectionModel.SelectionFlag.NoUpdate)
+                if key in selected:
+                    item.setSelected(True)
+                it += 1
         self._filling = False
         self.update_counts()
+        if not first_fill:
+            self.verticalScrollBar().setValue(scroll)
+            # Qt legt die Zeilenhöhen teils erst später fest – danach noch einmal setzen
+            QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(scroll))
 
     def _make_category(self, name: str, color: str) -> QTreeWidgetItem:
         item = QTreeWidgetItem([tr(name)])
